@@ -12,7 +12,13 @@ enum MacTools {
             OpenURLMacTool(),
             OpenAppTool(),
             RevealInFinderTool(),
-            ShowNotificationTool()
+            ShowNotificationTool(),
+            RunShortcutTool(),
+            ListShortcutsTool(),
+            FindContactTool(),
+            ComposeEmailTool(),
+            ComposeMessageTool(),
+            MusicControlTool()
         ]
     }
 }
@@ -177,5 +183,113 @@ struct ShowNotificationTool: AgentTool {
         let body = try args.requiredString("body")
         await MacNotifier.post(title: title, body: body)
         return ToolOutput(text: "Notification shown.")
+    }
+}
+
+struct ListShortcutsTool: AgentTool {
+    let name = "list_shortcuts"
+    let activityLabel = "Listing shortcuts"
+    let description = "List the names of the user's Shortcuts (to find one to run with run_shortcut)."
+    let parameters = Schema.object([:])
+
+    func run(_ args: JSONValue, context: ToolContext) async throws -> ToolOutput {
+        let result = try await ProcessRunner.run("/usr/bin/shortcuts", arguments: ["list"], timeout: 30)
+        let names = result.stdout.split(separator: "\n").map(String.init)
+        return ToolOutput(text: names.isEmpty ? "No shortcuts found." : "\(names.count) shortcuts:\n" + names.joined(separator: "\n"))
+    }
+}
+
+private func attachmentURLs(_ args: JSONValue, context: ToolContext) throws -> [URL] {
+    try args.stringArray("attachments").map { path in
+        let url = try context.workspace.resolve(path)
+        guard FileManager.default.fileExists(atPath: url.path) else { throw WorkspaceError.notFound(path) }
+        return url
+    }
+}
+
+struct ComposeEmailTool: AgentTool {
+    let name = "compose_email"
+    let activityLabel = "Writing email"
+    let description = "Open a ready-to-send email in Mail (the user reviews and clicks Send), optionally attaching files from the JARVIS folder."
+    let parameters = Schema.object([
+        "to": Schema.array("Recipient email addresses.", items: Schema.string("Email")),
+        "subject": Schema.string("Subject line."),
+        "body": Schema.string("Email text."),
+        "attachments": Schema.array("Relative paths of files to attach (optional).", items: Schema.string("Path"))
+    ], required: ["subject", "body"])
+
+    func run(_ args: JSONValue, context: ToolContext) async throws -> ToolOutput {
+        let urls = try attachmentURLs(args, context: context)
+        let to = args.stringArray("to")
+        let subject = try args.requiredString("subject")
+        let body = try args.requiredString("body")
+        let ok: Bool = await MainActor.run {
+            guard let service = NSSharingService(named: .composeEmail) else { return false }
+            service.recipients = to
+            service.subject = subject
+            let items: [Any] = [body as NSString] + urls.map { $0 as NSURL }
+            guard service.canPerform(withItems: items) else { return false }
+            service.perform(withItems: items)
+            return true
+        }
+        return ToolOutput(text: ok ? "Opened the email draft in Mail." : "Couldn't open Mail – is an account set up?")
+    }
+}
+
+struct ComposeMessageTool: AgentTool {
+    let name = "compose_message"
+    let activityLabel = "Writing message"
+    let description = "Open a ready-to-send iMessage in Messages (the user clicks Send), optionally with files."
+    let parameters = Schema.object([
+        "to": Schema.array("Phone numbers or iMessage emails.", items: Schema.string("Recipient")),
+        "body": Schema.string("Message text."),
+        "attachments": Schema.array("Relative paths of files to attach (optional).", items: Schema.string("Path"))
+    ], required: ["body"])
+
+    func run(_ args: JSONValue, context: ToolContext) async throws -> ToolOutput {
+        let urls = try attachmentURLs(args, context: context)
+        let to = args.stringArray("to")
+        let body = try args.requiredString("body")
+        let ok: Bool = await MainActor.run {
+            guard let service = NSSharingService(named: .composeMessage) else { return false }
+            service.recipients = to
+            let items: [Any] = [body as NSString] + urls.map { $0 as NSURL }
+            guard service.canPerform(withItems: items) else { return false }
+            service.perform(withItems: items)
+            return true
+        }
+        return ToolOutput(text: ok ? "Opened the message in Messages." : "Couldn't open Messages.")
+    }
+}
+
+struct MusicControlTool: AgentTool {
+    let name = "control_music"
+    let activityLabel = "Controlling music"
+    let description = "Control the Music app: play, pause, skip, what's playing, or play library songs matching an artist, song or album."
+    let parameters = Schema.object([
+        "action": Schema.string("What to do.", options: ["play", "pause", "toggle", "next", "previous", "now_playing", "play_search", "shuffle_all"]),
+        "query": Schema.string("Artist, song or album for play_search.")
+    ], required: ["action"])
+
+    func run(_ args: JSONValue, context: ToolContext) async throws -> ToolOutput {
+        let action = args.optionalString("action") ?? "toggle"
+        let query = (args.optionalString("query") ?? "").replacingOccurrences(of: "\\", with: "").replacingOccurrences(of: "\"", with: "")
+        let script: String
+        switch action {
+        case "play": script = "tell application \"Music\" to play"
+        case "pause": script = "tell application \"Music\" to pause"
+        case "toggle": script = "tell application \"Music\" to playpause"
+        case "next": script = "tell application \"Music\" to next track"
+        case "previous": script = "tell application \"Music\" to previous track"
+        case "now_playing":
+            script = "tell application \"Music\" to if player state is playing then return (name of current track) & \" – \" & (artist of current track)\nreturn \"Nothing is playing.\""
+        case "shuffle_all":
+            script = "tell application \"Music\"\nset shuffle enabled to true\nplay library playlist 1\nend tell"
+        default:
+            script = "tell application \"Music\" to play (first track of library playlist 1 whose name contains \"\(query)\" or artist contains \"\(query)\" or album contains \"\(query)\")"
+        }
+        let result = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-"], input: script, timeout: 30)
+        if result.status != 0 { return ToolOutput(text: "Music couldn't do that: \(result.stderr.prefix(300))") }
+        return ToolOutput(text: result.stdout.isEmpty ? "Done." : result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

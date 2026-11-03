@@ -4,7 +4,7 @@ Personal AI assistant apps for **iPhone** and **Mac**.
 
 | | iPhone app (`.ipa`) | Mac app |
 |---|---|---|
-| Brain | Google Gemini (your API key). Claude API is optional | Gemini, Claude API key, **or your Claude Pro/Max subscription** through Claude Code |
+| Brain | Google Gemini (your API key), plus optional Claude, **OpenAI**, **local models** (Ollama, LM Studio…) or **Apple's on-device model** | Gemini, Claude API key, **your Claude Pro/Max subscription** (via Claude Code), **OpenAI**, **local models**, or Apple's on-device model |
 | Main job | You say "make me X" and it creates the file in its own folder in the **Files app** | Watches your screen, **suggests what to do next**, and can act on your Mac |
 
 ---
@@ -36,12 +36,27 @@ You open the app, type or say a request, and JARVIS creates the file. Everything
 - Shortcuts actions **Make Files with JARVIS** (returns the files for chaining) and **Process File with JARVIS** (use it from the share sheet: summarise, translate, extract text from any photo or PDF)
 - Assign "Talk to JARVIS" to the **Action button**. Home-screen **quick actions** (long-press the icon). Links: `jarvis://voice`, `jarvis://briefing`, `jarvis://ask?q=…`
 
+**Choose your brain**
+- **Gemini** (default): chat, images, voices, Live voice
+- **Claude** (API key)
+- **OpenAI** (API key): GPT models picked automatically, plus OpenAI images and voices when there's no Gemini key
+- **Local / custom server**, any OpenAI-compatible endpoint:
+  - **Ollama**, **LM Studio**, **llama.cpp**, **Jan**, **vLLM**
+  - or clouds like **OpenRouter, Groq, DeepSeek, Mistral, xAI, Together**
+  - Presets and a **Detect servers** button are included. Models without native tool calling still make files through **prompted tools** (`<tool_call>` tags), and `<think>` reasoning is hidden.
+- **On-device (Apple Intelligence)**: free, private and offline on iOS 26 / macOS 26 devices that support Apple Intelligence
+- No key at all? Web search falls back to DuckDuckGo, and spoken replies use the device voice.
+
 **Personal assistant**
 - 📅 **Calendar**: add events and read your schedule. ✅ **Reminders**: add, list and complete them
 - ⏲ **Timers** ("remind me in 20 minutes") as notifications
 - 🌦 **Weather** for where you are or any city (Open-Meteo, no key needed)
 - 🧠 **Long-term memory**: it remembers your preferences and facts ("remember I'm vegetarian"). You can view and edit them in Settings
 - 🎭 **Modes**: JARVIS, Tutor, Interpreter (live translation), Writer, Coder, Life coach, Brainstorm, Chef
+- 🏠 **Run your Shortcuts**: "JARVIS, run Good Night" covers HomeKit scenes, automations and anything you've built in Shortcuts
+- ✉️ **Email & iMessage** drafts with attachments ("email the PDF to Sam"), with 👤 **contact lookup**
+- 🎵 **Music control**: play, pause, skip, what's playing, or play an artist from your library
+- 📤 **Export chats** as Markdown or PDF, and 🔎 **search** your conversation history
 
 **Making files**
 - 🖼 Images, plus **image editing** ("remove the background", "make it watercolour") with your photos as references
@@ -70,7 +85,8 @@ You open the app, type or say a request, and JARVIS creates the file. Everything
   - Privacy list of apps it never captures (password managers by default). JARVIS's own windows are never captured
   - Optional "current goal" so suggestions stay on topic
   - Notifications and spoken suggestions
-- ⌨️ **Global hotkeys**: `⌃⌥J` opens a floating command bar, `⌃⌥S` analyzes the screen now, `⌃⌥V` starts talking
+- ⌨️ **Global hotkeys**: `⌃⌥J` opens a floating command bar, `⌃⌥S` analyzes the screen now, `⌃⌥V` starts talking, `⌃⌥C` gets help with whatever is on your clipboard
+- 🦙 **Local models**: point JARVIS at Ollama or LM Studio on `localhost` (auto-detected) for fully private chat and Screen Watch
 - 🧰 **Mac agent tools**: screenshot, current app and window, zsh commands, AppleScript (to control Safari, Notes, Mail, Music, Finder…), open URLs and apps, show in Finder, notifications, clipboard
 - ✅ Risky actions need your approval (auto-approve is optional)
 - 🍔 Menu-bar control centre, main window with chat, Screen Watch, Files and Settings
@@ -118,7 +134,7 @@ open JARVIS.xcodeproj
 - Scheme **JARVIS** builds the iPhone app. Pick your Team under *Signing & Capabilities* and run it on your phone.
 - Scheme **JARVISMac** builds the Mac app.
 
-Requirements: Xcode 16 or newer, iOS 17+, macOS 14 (Sonoma) or newer.
+Requirements: Xcode 16 or newer (Xcode 26 to include Apple's on-device model), iOS 17+, macOS 14 (Sonoma) or newer.
 
 ---
 
@@ -134,6 +150,18 @@ The chat, image and speech models default to **Automatic**: JARVIS asks Google w
 Create a key at <https://console.anthropic.com/settings/keys>, paste it under **Settings › Claude**, and choose **Claude** as the brain.
 The default model is `claude-opus-5-5`, and you can set model and effort. Image generation still uses Gemini if you've added a Gemini key.
 
+### OpenAI (optional)
+Create a key at <https://platform.openai.com/api-keys>, paste it under **Settings › OpenAI**, and choose **OpenAI** as the brain. "Automatic" picks the newest GPT chat model your key can use.
+
+### Local models: Ollama, LM Studio, etc. (optional)
+1. Mac: install [Ollama](https://ollama.com) and run `ollama pull qwen3` (any tool-capable model works). Or start LM Studio's local server.
+2. In JARVIS go to **Settings › Local & custom models**, click **Detect servers** (or pick a preset), then **Load models**. Choose **Local** as the brain.
+3. **From iPhone**: run Ollama on your Mac with `OLLAMA_HOST=0.0.0.0 ollama serve` and enter `http://<your-Mac-IP>:11434/v1`. iOS asks for Local Network permission the first time.
+4. If a model can't call tools natively, set **Tool use** to *Prompted*. JARVIS also switches to prompted mode automatically when the server says tools aren't supported.
+
+### Apple Intelligence (optional)
+On an Apple Intelligence–capable iPhone or Mac running iOS/macOS 26 with Apple Intelligence on, choose **On-device** as the brain. It needs no key and works offline.
+
 ### Claude subscription (Mac)
 1. Install Claude Code: <https://docs.claude.com/en/docs/claude-code/setup>
 2. Run `claude` once in Terminal and sign in with your Claude Pro/Max account.
@@ -142,7 +170,7 @@ The default model is `claude-opus-5-5`, and you can set model and effort. Image 
 JARVIS runs the official `claude` CLI in your JARVIS folder, so requests use your subscription. Screenshots are passed to it as image files.
 
 ### iPhone permissions
-JARVIS asks for permission the first time it needs each one: microphone and speech, camera, Photos (to save images), Calendars, Reminders, Location (weather) and Notifications (timers). Live voice keeps running if you lock the screen during a call.
+JARVIS asks for permission the first time it needs each one: microphone and speech, camera, Photos (to save images), Calendars, Reminders, Contacts, Media library (music), Location (weather), Local Network (local model servers) and Notifications (timers). Live voice keeps running if you lock the screen during a call.
 
 ### Mac permissions
 - **Screen Recording**: System Settings › Privacy & Security › Screen & System Audio Recording › JARVIS. Turn it back on after updating the app, because each unsigned build has a new signature.

@@ -142,7 +142,7 @@ struct CommandBarView: View {
             }
 
             HStack {
-                Text("⌃⌥J toggle · ⌃⌥S analyze screen · esc close")
+                Text("⌃⌥J toggle · ⌃⌥S analyze screen · ⌃⌥C clipboard · ⌃⌥V talk · esc close")
                     .font(.caption2)
                     .foregroundColor(Theme.secondaryText)
                 Spacer()

@@ -26,7 +26,7 @@ final class VoiceOutput: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
     var usesNaturalVoice: Bool {
         let settings = AppSettings.shared
-        return settings.voiceEngine == "natural" && settings.hasGeminiKey
+        return settings.voiceEngine == "natural" && (settings.hasGeminiKey || settings.hasOpenAIKey)
     }
 
     func speak(_ text: String) {
@@ -77,10 +77,18 @@ final class VoiceOutput: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         let key = settings.geminiAPIKey
         let voice = settings.geminiVoiceName
         let preferredModel = settings.geminiTTSModel
+        let openAIKey = settings.openAIAPIKey
+        let openAIVoice = settings.openAIVoice
         prepareTask = Task { [weak self] in
             do {
-                let model = await GeminiModelCatalog.shared.resolve(.tts, preferred: preferredModel, apiKey: key)
-                let wav = try await GeminiClient(apiKey: key).synthesizeSpeech(text: snippet, voice: voice, style: nil, model: model)
+                let wav: Data
+                if key.isEmpty {
+                    wav = try await OpenAICompatibleClient(baseURL: OpenAICompatibleClient.openAIBaseURL, apiKey: openAIKey)
+                        .speech(snippet, voice: openAIVoice)
+                } else {
+                    let model = await GeminiModelCatalog.shared.resolve(.tts, preferred: preferredModel, apiKey: key)
+                    wav = try await GeminiClient(apiKey: key).synthesizeSpeech(text: snippet, voice: voice, style: nil, model: model)
+                }
                 guard !Task.isCancelled, let self else { return }
                 if self.cache.count > 20 { self.cache.removeAll() }
                 self.cache[cacheKey] = wav

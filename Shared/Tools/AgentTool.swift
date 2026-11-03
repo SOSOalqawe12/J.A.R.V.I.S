@@ -17,7 +17,7 @@ enum ToolError: LocalizedError {
         case .missingArgument(let name): return "Missing required argument \"\(name)\"."
         case .invalid(let message): return message
         case .denied(let action): return "The user denied permission to \(action)."
-        case .needsGeminiKey(let feature): return "\(feature) needs a Gemini API key. Ask the user to add one in JARVIS Settings."
+        case .needsGeminiKey(let feature): return "\(feature) needs a Gemini or OpenAI API key. Ask the user to add one in JARVIS Settings."
         }
     }
 }
@@ -30,6 +30,10 @@ struct ToolContext {
 
     var gemini: GeminiClient? {
         settings.hasGeminiKey ? GeminiClient(apiKey: settings.geminiAPIKey) : nil
+    }
+
+    var openAI: OpenAICompatibleClient? {
+        settings.hasOpenAIKey ? OpenAICompatibleClient(baseURL: OpenAICompatibleClient.openAIBaseURL, apiKey: settings.openAIAPIKey) : nil
     }
 
     func requireGemini(_ feature: String) throws -> GeminiClient {

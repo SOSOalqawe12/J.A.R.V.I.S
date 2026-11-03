@@ -78,7 +78,7 @@ struct ChatView: View {
         Button(action: onOpenSettings) {
             HStack(spacing: 10) {
                 Image(systemName: "key.fill")
-                Text(settings.provider == .claude ? "Add your Claude API key to wake me up." : "Add your Gemini API key to wake me up.")
+                Text(setupMessage)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -132,6 +132,16 @@ struct ChatView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+        }
+    }
+
+    private var setupMessage: String {
+        switch settings.provider {
+        case .claude: return "Add your Claude API key to wake me up."
+        case .openai: return "Add your OpenAI API key to wake me up."
+        case .local: return "Set your local server address in Settings."
+        case .apple: return "Apple Intelligence isn't available on this device – pick another brain."
+        default: return "Add your Gemini API key to wake me up."
         }
     }
 
@@ -378,6 +388,13 @@ struct ConversationListView: View {
     @ObservedObject var vm: ChatViewModel
     @ObservedObject var store = ConversationStore.shared
     var onSelect: () -> Void = {}
+    @State private var query = ""
+
+    private var filtered: [ConversationSummary] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return store.summaries }
+        return store.summaries.filter { $0.title.localizedCaseInsensitiveContains(needle) }
+    }
 
     var body: some View {
         List {
@@ -387,14 +404,14 @@ struct ConversationListView: View {
             } label: {
                 Label("New conversation", systemImage: "plus.bubble")
             }
-            ForEach(store.summaries) { summary in
+            ForEach(filtered) { summary in
                 Button {
                     vm.open(summary.id)
                     onSelect()
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
-                            if summary.origin == "siri" { Image(systemName: "mic.circle") }
+                            if summary.origin == "siri" || summary.origin == "voice" { Image(systemName: "mic.circle") }
                             Text(summary.title).lineLimit(1)
                         }
                         Text(summary.updated, style: .relative)
@@ -407,9 +424,10 @@ struct ConversationListView: View {
                 }
             }
             .onDelete { offsets in
-                let ids = offsets.map { store.summaries[$0].id }
+                let ids = offsets.map { filtered[$0].id }
                 for id in ids { vm.delete(id) }
             }
         }
+        .searchable(text: $query, prompt: "Search conversations")
     }
 }

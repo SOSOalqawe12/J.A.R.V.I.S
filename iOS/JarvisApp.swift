@@ -152,8 +152,26 @@ struct RootView: View {
             } label: {
                 Image(systemName: chat.currentMode.icon)
             }
-            Button { chat.newConversation(mode: chat.currentMode) } label: { Image(systemName: "square.and.pencil") }
-                .disabled(chat.isRunning)
+            Menu {
+                Button { chat.newConversation(mode: chat.currentMode) } label: { Label("New chat", systemImage: "square.and.pencil") }
+                Button { export(asPDF: false) } label: { Label("Export as Markdown", systemImage: "doc.plaintext") }
+                Button { export(asPDF: true) } label: { Label("Export as PDF", systemImage: "doc.richtext") }
+                Button { chat.send(ChatViewModel.briefingPrompt) } label: { Label("Daily briefing", systemImage: "sun.max") }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .disabled(chat.isRunning)
+        }
+    }
+
+    private func export(asPDF: Bool) {
+        let conversation = chat.conversation
+        guard !conversation.messages.isEmpty else { return }
+        Task {
+            if let url = try? await ConversationExporter.export(conversation, asPDF: asPDF) {
+                chat.noteCreatedFiles([Workspace.shared.relativePath(of: url)])
+                _ = await SheetPresenter.shared.share([url])
+            }
         }
     }
 

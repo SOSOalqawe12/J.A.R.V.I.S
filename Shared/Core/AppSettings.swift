@@ -12,6 +12,19 @@ final class AppSettings: ObservableObject {
 
     @Published var geminiAPIKey: String { didSet { KeychainStore.set(geminiAPIKey, for: "gemini") } }
     @Published var claudeAPIKey: String { didSet { KeychainStore.set(claudeAPIKey, for: "claude") } }
+    @Published var openAIAPIKey: String { didSet { KeychainStore.set(openAIAPIKey, for: "openai") } }
+    @Published var localAPIKey: String { didSet { KeychainStore.set(localAPIKey, for: "local") } }
+
+    // MARK: OpenAI & OpenAI-compatible servers
+
+    /// Empty = pick automatically from /models.
+    @Published var openAIModel: String { didSet { defaults.set(openAIModel, forKey: "openAIModel") } }
+    @Published var openAIImageModel: String { didSet { defaults.set(openAIImageModel, forKey: "openAIImageModel") } }
+    @Published var openAIVoice: String { didSet { defaults.set(openAIVoice, forKey: "openAIVoice") } }
+    @Published var localBaseURL: String { didSet { defaults.set(localBaseURL, forKey: "localBaseURL") } }
+    @Published var localModel: String { didSet { defaults.set(localModel, forKey: "localModel") } }
+    /// native = OpenAI tool calling, prompted = <tool_call> tags in text, off = chat only.
+    @Published var localToolMode: String { didSet { defaults.set(localToolMode, forKey: "localToolMode") } }
 
     /// Empty string = pick automatically from the models available to the key.
     @Published var geminiChatModel: String { didSet { defaults.set(geminiChatModel, forKey: "geminiChatModel") } }
@@ -81,6 +94,14 @@ final class AppSettings: ObservableObject {
         provider = ProviderKind(rawValue: d.string(forKey: "provider") ?? "") ?? .gemini
         geminiAPIKey = KeychainStore.get("gemini")
         claudeAPIKey = KeychainStore.get("claude")
+        openAIAPIKey = KeychainStore.get("openai")
+        localAPIKey = KeychainStore.get("local")
+        openAIModel = d.string(forKey: "openAIModel") ?? ""
+        openAIImageModel = d.string(forKey: "openAIImageModel") ?? "gpt-image-1"
+        openAIVoice = d.string(forKey: "openAIVoice") ?? "onyx"
+        localBaseURL = d.string(forKey: "localBaseURL") ?? "http://localhost:11434/v1"
+        localModel = d.string(forKey: "localModel") ?? ""
+        localToolMode = d.string(forKey: "localToolMode") ?? "native"
         geminiChatModel = d.string(forKey: "geminiChatModel") ?? ""
         geminiImageModel = d.string(forKey: "geminiImageModel") ?? ""
         geminiTTSModel = d.string(forKey: "geminiTTSModel") ?? ""
@@ -118,6 +139,7 @@ final class AppSettings: ObservableObject {
 
     var hasGeminiKey: Bool { !geminiAPIKey.isEmpty }
     var hasClaudeKey: Bool { !claudeAPIKey.isEmpty }
+    var hasOpenAIKey: Bool { !openAIAPIKey.isEmpty }
 
     /// True when the selected provider has what it needs to run.
     var isProviderConfigured: Bool {
@@ -125,6 +147,9 @@ final class AppSettings: ObservableObject {
         case .gemini: return hasGeminiKey
         case .claude: return hasClaudeKey
         case .claudeCode: return true
+        case .openai: return hasOpenAIKey
+        case .local: return !localBaseURL.trimmingCharacters(in: .whitespaces).isEmpty
+        case .apple: return AppleIntelligence.isAvailable
         }
     }
 

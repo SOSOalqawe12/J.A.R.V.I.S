@@ -58,12 +58,26 @@ struct GenerateImageTool: AgentTool {
     ], required: ["prompt", "path"])
 
     func run(_ args: JSONValue, context: ToolContext) async throws -> ToolOutput {
-        let gemini = try context.requireGemini("Image generation")
         let prompt = try args.requiredString("prompt")
         let path = try args.requiredString("path")
         let references = try args.stringArray("reference_images").prefix(6).map { try loadImageAttachment($0, context: context) }
-        let model = await context.geminiModel(.image)
-        let image = try await gemini.generateImage(prompt: prompt, inputs: Array(references), aspectRatio: args.optionalString("aspect_ratio"), model: model)
+        let image: GeminiClient.GeneratedImage
+        let model: String
+        if let gemini = context.gemini {
+            model = await context.geminiModel(.image)
+            image = try await gemini.generateImage(prompt: prompt, inputs: Array(references), aspectRatio: args.optionalString("aspect_ratio"), model: model)
+        } else if let openAI = context.openAI {
+            model = context.settings.openAIImageModel
+            let data: Data
+            if let reference = references.first {
+                data = try await openAI.editImage(reference, prompt: prompt, model: model)
+            } else {
+                data = try await openAI.generateImage(prompt: prompt, aspectRatio: args.optionalString("aspect_ratio"), model: model)
+            }
+            image = GeminiClient.GeneratedImage(data: data, mimeType: "image/png", caption: nil)
+        } else {
+            throw ToolError.needsGeminiKey("Image generation")
+        }
         let rel = try saveImage(image, to: path, context: context)
         var text = "Saved image to \(rel) (model: \(model))."
         if let caption = image.caption, !caption.isEmpty { text += " Model note: \(caption.prefix(300))" }
@@ -82,16 +96,21 @@ struct EditImageTool: AgentTool {
     ], required: ["source_path", "instructions"])
 
     func run(_ args: JSONValue, context: ToolContext) async throws -> ToolOutput {
-        let gemini = try context.requireGemini("Image editing")
         let source = try args.requiredString("source_path")
         let input = try loadImageAttachment(source, context: context)
         let output = args.optionalString("output_path")
             ?? ((source as NSString).deletingPathExtension + " edited.png")
-        let model = await context.geminiModel(.image)
-        let image = try await gemini.generateImage(
-            prompt: "Edit this image: \(try args.requiredString("instructions")). Keep everything else unchanged.",
-            inputs: [input], aspectRatio: nil, model: model
-        )
+        let instructions = "Edit this image: \(try args.requiredString("instructions")). Keep everything else unchanged."
+        let image: GeminiClient.GeneratedImage
+        if let gemini = context.gemini {
+            let model = await context.geminiModel(.image)
+            image = try await gemini.generateImage(prompt: instructions, inputs: [input], aspectRatio: nil, model: model)
+        } else if let openAI = context.openAI {
+            let data = try await openAI.editImage(input, prompt: instructions, model: context.settings.openAIImageModel)
+            image = GeminiClient.GeneratedImage(data: data, mimeType: "image/png", caption: nil)
+        } else {
+            throw ToolError.needsGeminiKey("Image editing")
+        }
         let rel = try saveImage(image, to: output, context: context)
         return ToolOutput(text: "Saved edited image to \(rel).", files: [rel])
     }
@@ -306,6 +325,14 @@ struct TextToSpeechTool: AgentTool {
             try wav.write(to: url)
             let rel = context.workspace.relativePath(of: url)
             return ToolOutput(text: "Saved audio to \(rel) (voice \(voice)).", files: [rel])
+        }
+        if let openAI = context.openAI {
+            let voice = OpenAICompatibleClient.voices.contains(args.optionalString("voice") ?? "") ? args.optionalString("voice")! : context.settings.openAIVoice
+            let mp3 = try await openAI.speech(text, voice: voice)
+            let url = try context.workspace.destination(for: (path as NSString).deletingPathExtension + ".mp3", overwrite: false)
+            try mp3.write(to: url)
+            let rel = context.workspace.relativePath(of: url)
+            return ToolOutput(text: "Saved audio to \(rel) (OpenAI voice \(voice)).", files: [rel])
         }
         // Offline fallback: the system voice.
         let cafPath = (path as NSString).deletingPathExtension + ".caf"

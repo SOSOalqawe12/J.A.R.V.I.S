@@ -4,6 +4,9 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable {
     case gemini
     case claude
     case claudeCode
+    case openai
+    case local
+    case apple
 
     var id: String { rawValue }
 
@@ -12,6 +15,9 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable {
         case .gemini: return "Google Gemini"
         case .claude: return "Claude (API key)"
         case .claudeCode: return "Claude (subscription via Claude Code)"
+        case .openai: return "OpenAI (API key)"
+        case .local: return "Local / custom server (Ollama, LM Studio…)"
+        case .apple: return "On-device (Apple Intelligence)"
         }
     }
 
@@ -20,15 +26,18 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable {
         case .gemini: return "Gemini"
         case .claude: return "Claude"
         case .claudeCode: return "Claude Code"
+        case .openai: return "OpenAI"
+        case .local: return "Local"
+        case .apple: return "On-device"
         }
     }
 
     /// Providers that can be used on the current platform.
     static var available: [ProviderKind] {
         #if os(macOS)
-        return [.gemini, .claude, .claudeCode]
+        return [.gemini, .claude, .claudeCode, .openai, .local, .apple]
         #else
-        return [.gemini, .claude]
+        return [.gemini, .claude, .openai, .local, .apple]
         #endif
     }
 }

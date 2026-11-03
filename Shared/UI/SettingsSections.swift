@@ -13,6 +13,11 @@ struct AIProviderSettingsSections: View {
     @State private var claudeModels: [ClaudeClient.ModelInfo] = []
     @State private var testing = false
     @State private var testResult: String?
+    @State private var openAIModels: [String] = []
+    @State private var localModels: [String] = []
+    @State private var detected: [LocalServerDetector.Found] = []
+    @State private var localStatus: String?
+    @State private var detecting = false
 
     var body: some View {
         Group {
@@ -75,6 +80,19 @@ struct AIProviderSettingsSections: View {
                 Text("Higher effort = smarter but slower and more tokens. Image generation still uses Gemini if a Gemini key is set.")
             }
 
+            openAISection
+            localSection
+
+            Section {
+                Text(AppleIntelligence.status)
+                    .font(.callout)
+                    .foregroundColor(AppleIntelligence.isAvailable ? .primary : .secondary)
+            } header: {
+                Text("On-device (Apple Intelligence)")
+            } footer: {
+                Text("Free, private and offline. Uses Apple's small on-device model with a focused set of tools – great for quick notes, timers, reminders and simple questions.")
+            }
+
             Section {
                 Toggle("Stream replies as they're written", isOn: $settings.streamResponses)
                 Button {
@@ -93,6 +111,138 @@ struct AIProviderSettingsSections: View {
         }
         .task(id: settings.geminiAPIKey) { await loadGeminiModels(refresh: false) }
         .task(id: settings.claudeAPIKey) { await loadClaudeModels() }
+        .task(id: settings.openAIAPIKey) { await loadOpenAIModels() }
+    }
+
+    // MARK: OpenAI
+
+    private var openAISection: some View {
+        Section {
+            HStack {
+                SecureField("OpenAI API key", text: $settings.openAIAPIKey)
+                    .textContentType(.password)
+                    .autocorrectionDisabled()
+                pasteButton { settings.openAIAPIKey = $0 }
+            }
+            Link("Create a key at platform.openai.com", destination: URL(string: "https://platform.openai.com/api-keys")!)
+            if settings.hasOpenAIKey {
+                Picker("Chat model", selection: $settings.openAIModel) {
+                    Text("Automatic").tag("")
+                    ForEach(openAIModels, id: \.self) { Text($0).tag($0) }
+                    if !settings.openAIModel.isEmpty && !openAIModels.contains(settings.openAIModel) {
+                        Text(settings.openAIModel).tag(settings.openAIModel)
+                    }
+                }
+                TextField("Image model", text: $settings.openAIImageModel)
+                    .autocorrectionDisabled()
+                Picker("Voice", selection: $settings.openAIVoice) {
+                    ForEach(OpenAICompatibleClient.voices, id: \.self) { Text($0.capitalized).tag($0) }
+                }
+            }
+        } header: {
+            Text("OpenAI")
+        } footer: {
+            Text("Choose “OpenAI” as the brain to chat with GPT models. The key is also used for images and spoken audio when no Gemini key is set.")
+        }
+    }
+
+    // MARK: Local & custom servers
+
+    private var localSection: some View {
+        Section {
+            TextField("Server URL, e.g. http://localhost:11434/v1", text: $settings.localBaseURL)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                #endif
+            Menu("Presets: Ollama, LM Studio, OpenRouter, Groq…") {
+                ForEach(OpenAICompatibleClient.presets) { preset in
+                    Button("\(preset.name) – \(preset.baseURL)") {
+                        settings.localBaseURL = preset.baseURL
+                        settings.localModel = ""
+                        localStatus = preset.note
+                        localModels = []
+                    }
+                }
+            }
+            SecureField("API key (only if the server needs one)", text: $settings.localAPIKey)
+                .textContentType(.password)
+                .autocorrectionDisabled()
+            Picker("Model", selection: $settings.localModel) {
+                Text("First available").tag("")
+                ForEach(localModels, id: \.self) { Text($0).tag($0) }
+                if !settings.localModel.isEmpty && !localModels.contains(settings.localModel) {
+                    Text(settings.localModel).tag(settings.localModel)
+                }
+            }
+            Picker("Tool use", selection: $settings.localToolMode) {
+                Text("Native function calling").tag("native")
+                Text("Prompted (<tool_call> tags)").tag("prompted")
+                Text("Off – chat only").tag("off")
+            }
+            HStack {
+                Button("Load models") { Task { await loadLocalModels() } }
+                Spacer()
+                Button(detecting ? "Scanning…" : "Detect servers") { Task { await detectServers() } }
+                    .disabled(detecting)
+            }
+            .buttonStyle(.borderless)
+            ForEach(detected) { server in
+                Button {
+                    settings.localBaseURL = server.baseURL
+                    localModels = server.models
+                    if settings.localModel.isEmpty || !server.models.contains(settings.localModel) {
+                        settings.localModel = server.models.first ?? ""
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(server.name) · \(server.baseURL)").font(.callout)
+                        Text("\(server.models.count) model(s): \(server.models.prefix(4).joined(separator: ", "))")
+                            .font(.caption).foregroundColor(.secondary).lineLimit(2)
+                    }
+                }
+            }
+            if let localStatus {
+                Text(localStatus).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
+            }
+        } header: {
+            Text("Local & custom models")
+        } footer: {
+            #if os(iOS)
+            Text("Run Ollama or LM Studio on your computer and enter its network address (e.g. http://192.168.1.20:11434/v1 – for Ollama start it with OLLAMA_HOST=0.0.0.0). Also works with any OpenAI-compatible cloud (OpenRouter, Groq, DeepSeek…). Then choose “Local” as the brain.")
+            #else
+            Text("Works with Ollama, LM Studio, llama.cpp, Jan, vLLM and any OpenAI-compatible cloud (OpenRouter, Groq, DeepSeek, Mistral, xAI…). Pick a model with tool support (e.g. Qwen, Llama 3.1+, Mistral) for file making, or switch Tool use to Prompted.")
+            #endif
+        }
+    }
+
+    private func loadOpenAIModels() async {
+        guard settings.hasOpenAIKey else { openAIModels = []; return }
+        let client = OpenAICompatibleClient(baseURL: OpenAICompatibleClient.openAIBaseURL, apiKey: settings.openAIAPIKey)
+        let all = (try? await client.listModels()) ?? []
+        openAIModels = all.filter { $0.hasPrefix("gpt-") || $0.hasPrefix("o") }
+            .filter { id in !["audio", "realtime", "transcribe", "tts", "image", "embedding", "moderation"].contains { id.contains($0) } }
+    }
+
+    private func loadLocalModels() async {
+        let client = OpenAICompatibleClient(baseURL: settings.localBaseURL, apiKey: settings.localAPIKey)
+        do {
+            localModels = try await client.listModels()
+            localStatus = "✅ Connected – \(localModels.count) model(s)."
+            if settings.localModel.isEmpty, let first = localModels.first { settings.localModel = first }
+        } catch {
+            localStatus = "❌ \(error.localizedDescription)"
+        }
+    }
+
+    private func detectServers() async {
+        detecting = true
+        defer { detecting = false }
+        var hosts = ["localhost", "127.0.0.1"]
+        if let host = LocalServerDetector.host(of: settings.localBaseURL) { hosts.append(host) }
+        detected = await LocalServerDetector.scan(hosts: hosts)
+        localStatus = detected.isEmpty ? "No servers found on \(hosts.joined(separator: ", ")). Start Ollama/LM Studio, or type its address." : nil
     }
 
     static let geminiVoices = ["Charon", "Kore", "Puck", "Zephyr", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
@@ -105,6 +255,9 @@ struct AIProviderSettingsSections: View {
         case .gemini: return "Gemini is the default brain on iPhone and can generate images and audio."
         case .claude: return "Claude via your Anthropic API key."
         case .claudeCode: return "Uses your Claude Pro/Max subscription through the official Claude Code CLI (install it and run `claude` once to log in)."
+        case .openai: return "OpenAI GPT models via your API key."
+        case .local: return "Your own model server – Ollama, LM Studio, llama.cpp – or any OpenAI-compatible service."
+        case .apple: return "Apple's on-device model: private and offline (iOS 26 / macOS 26 with Apple Intelligence)."
         }
     }
 

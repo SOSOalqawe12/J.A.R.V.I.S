@@ -22,23 +22,52 @@ struct WebSearchTool: AgentTool {
             let client = ClaudeClient(apiKey: context.settings.claudeAPIKey)
             return ToolOutput(text: try await client.webSearch(query, model: context.settings.claudeModel))
         }
-        throw ToolError.invalid("Web search needs a Gemini or Claude API key.")
+        // No key needed: DuckDuckGo results (use fetch_url to read a page).
+        let results = try await DuckDuckGo.search(query)
+        if results.isEmpty { return ToolOutput(text: "No results found for \"\(query)\".") }
+        let lines = results.prefix(8).enumerated().map { "\($0.offset + 1). \($0.element.title)\n   \($0.element.url)\n   \($0.element.snippet)" }
+        return ToolOutput(text: "Search results for \"\(query)\" (open one with fetch_url for details):\n" + lines.joined(separator: "\n"))
     }
 }
 
-enum WebText {
-    static func plainText(fromHTML html: String) -> String {
-        var text = html
-        for pattern in ["(?is)<script.*?</script>", "(?is)<style.*?</style>", "(?is)<noscript.*?</noscript>", "(?is)<svg.*?</svg>", "(?s)<!--.*?-->"] {
-            text = text.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
+enum DuckDuckGo {
+    struct Result: Hashable {
+        let title: String
+        let url: String
+        let snippet: String
+    }
+
+    static func search(_ query: String) async throws -> [Result] {
+        var components = URLComponents(string: "https://html.duckduckgo.com/html/")!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        var request = URLRequest(url: components.url!)
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+        let (data, _) = try await HTTP.session.data(for: request)
+        return parse(String(decoding: data, as: UTF8.self))
+    }
+
+    static func parse(_ html: String) -> [Result] {
+        html.components(separatedBy: "class=\"result__a\"").dropFirst().compactMap { chunk in
+            guard var link = firstMatch("href=\"([^\"]+)\"", in: chunk),
+                  let rawTitle = firstMatch("(?s)>(.*?)</a>", in: chunk) else { return nil }
+            link = link.replacingOccurrences(of: "&amp;", with: "&")
+            if let components = URLComponents(string: link.hasPrefix("//") ? "https:" + link : link),
+               let target = components.queryItems?.first(where: { $0.name == "uddg" })?.value {
+                link = target
+            }
+            let title = WebText.plainText(fromHTML: rawTitle)
+            guard !title.isEmpty, link.hasPrefix("http") else { return nil }
+            let snippet = firstMatch("(?s)class=\"result__snippet\"[^>]*>(.*?)</a>", in: chunk).map(WebText.plainText(fromHTML:)) ?? ""
+            return Result(title: title, url: link, snippet: snippet)
         }
-        text = text.replacingOccurrences(of: "(?i)<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>", with: "\n", options: .regularExpression)
-        text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-        let entities = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
-        for (entity, value) in entities { text = text.replacingOccurrences(of: entity, with: value) }
-        text = text.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
-        text = text.replacingOccurrences(of: "\\n\\s*\\n+", with: "\n\n", options: .regularExpression)
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let ns = text as NSString
+        guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
+              match.numberOfRanges > 1, match.range(at: 1).location != NSNotFound else { return nil }
+        return ns.substring(with: match.range(at: 1))
     }
 }
 

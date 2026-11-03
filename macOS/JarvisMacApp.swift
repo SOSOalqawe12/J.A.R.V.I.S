@@ -90,6 +90,13 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
         hotKeys.register(keyCode: kVK_ANSI_S, modifiers: modifiers) {
             Task { @MainActor in MacAppDelegate.analyzeScreenNow() }
         }
+        hotKeys.register(keyCode: kVK_ANSI_C, modifiers: modifiers) {
+            Task { @MainActor in
+                guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+                CommandPanel.shared.show()
+                ChatViewModel.shared.send("Help me with this (from my clipboard) – explain, fix or improve it as appropriate:\n\n\(text.prefix(20_000))")
+            }
+        }
         hotKeys.register(keyCode: kVK_ANSI_V, modifiers: modifiers) {
             Task { @MainActor in
                 CommandPanel.shared.show()
@@ -214,8 +221,15 @@ struct MacRootView: View {
                         Picker("Brain", selection: $settings.provider) {
                             ForEach(ProviderKind.available) { Text($0.shortName).tag($0) }
                         }
-                        .pickerStyle(.segmented)
+                        .pickerStyle(.menu)
                         .help("Which AI powers JARVIS")
+                        Menu {
+                            Button("Export as Markdown") { export(asPDF: false) }
+                            Button("Export as PDF") { export(asPDF: true) }
+                        } label: {
+                            Label("Export", systemImage: "square.and.arrow.up")
+                        }
+                        .disabled(chat.conversation.messages.isEmpty)
                         Button {
                             chat.newConversation()
                         } label: {
@@ -244,6 +258,16 @@ struct MacRootView: View {
         chat.attach(fileURL: url)
         chat.draft = "Look at \(url.lastPathComponent) and "
         state.section = .chat
+    }
+
+    private func export(asPDF: Bool) {
+        let conversation = chat.conversation
+        Task {
+            if let url = try? await ConversationExporter.export(conversation, asPDF: asPDF) {
+                chat.noteCreatedFiles([Workspace.shared.relativePath(of: url)])
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        }
     }
 }
 

@@ -36,6 +36,10 @@ enum SystemPrompts {
         - Memory: when the user shares a lasting preference or personal fact, or says "remember", call remember. \
         Use forget / recall_memories when asked. Never store passwords or card numbers.
         - Text in photos, screenshots or scans → extract_text (fast, on-device).
+        - Smart home, messages, settings and custom automations → run_shortcut with the user's Shortcut name \
+        (on Mac, list_shortcuts shows them). Contacts → find_contact.
+        - Sending things → compose_email / compose_message (the user reviews and taps Send); attach files you made.
+        - Music → control_music (play, pause, skip, what's playing, play an artist or song from the library).
 
         # Thinking and acting
         - For current facts (news, prices, scores) use web_search; to read a page use fetch_url.

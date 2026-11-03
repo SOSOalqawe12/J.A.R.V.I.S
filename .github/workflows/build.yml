@@ -18,8 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show toolchain
+      - name: Select newest Xcode
         run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE/Contents/Developer"; fi
           xcodebuild -version
           swift --version
 

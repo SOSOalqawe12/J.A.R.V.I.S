@@ -37,6 +37,27 @@ final class AgentEngine {
             #else
             throw LLMError.unavailable("Claude Code (subscription) is only available in the Mac app.")
             #endif
+        case .openai:
+            guard settings.hasOpenAIKey else { throw LLMError.missingAPIKey(.openai) }
+            let client = OpenAICompatibleClient(baseURL: OpenAICompatibleClient.openAIBaseURL, apiKey: settings.openAIAPIKey)
+            var model = settings.openAIModel
+            if model.isEmpty { model = await OpenAIModelCatalog.shared.bestModel(client: client) }
+            return OpenAICompatibleProvider(kind: .openai, client: client, model: model, toolMode: .native)
+        case .local:
+            let base = settings.localBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !base.isEmpty else { throw LLMError.unavailable("Set your local server address in Settings › Local models.") }
+            let client = OpenAICompatibleClient(baseURL: base, apiKey: settings.localAPIKey)
+            var model = settings.localModel
+            if model.isEmpty {
+                guard let first = try? await client.listModels().first else {
+                    throw LLMError.unavailable("Couldn't reach \(base). Is the server running? From iPhone use your computer's network address, not localhost.")
+                }
+                model = first
+            }
+            let mode = OpenAICompatibleProvider.ToolMode(rawValue: settings.localToolMode) ?? .native
+            return OpenAICompatibleProvider(kind: .local, client: client, model: model, toolMode: mode)
+        case .apple:
+            return AppleIntelligenceProvider()
         }
     }
 
@@ -116,5 +137,20 @@ final class AgentEngine {
         } catch {
             return ToolResult(callID: call.id, name: call.name, output: "Error: \(error.localizedDescription)", isError: true)
         }
+    }
+}
+
+/// Remembers the best OpenAI chat model available to a key.
+actor OpenAIModelCatalog {
+    static let shared = OpenAIModelCatalog()
+    static let fallback = "gpt-4o"
+    private var cache: [String: String] = [:]
+
+    func bestModel(client: OpenAICompatibleClient) async -> String {
+        if let cached = cache[client.apiKey] { return cached }
+        let models = (try? await client.listModels()) ?? []
+        let best = OpenAICompatibleClient.bestOpenAIModel(models) ?? OpenAIModelCatalog.fallback
+        if !models.isEmpty { cache[client.apiKey] = best }
+        return best
     }
 }

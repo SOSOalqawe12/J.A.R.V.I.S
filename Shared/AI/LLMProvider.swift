@@ -73,6 +73,15 @@ enum HTTP {
         return URLSession(configuration: config)
     }()
 
+    /// Short timeouts, no waiting for connectivity (server discovery, model lists).
+    static let quickSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 8
+        config.timeoutIntervalForResource = 15
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
+
     static func send(_ request: URLRequest, errorParser: (JSONValue) -> String?) async throws -> JSONValue {
         var lastError: Error?
         // Retry transient failures (rate limit / overload / 5xx) with backoff.

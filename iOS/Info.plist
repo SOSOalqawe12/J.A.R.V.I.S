@@ -50,6 +50,24 @@
 	<string>Pick photos for JARVIS to look at or edit.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock JARVIS with Face ID.</string>
+	<!-- Local model servers (Ollama, LM Studio…) usually speak plain http on your network. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSContactsUsageDescription</key>
+	<string>JARVIS looks up phone numbers and emails when you ask it to message or email someone.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>JARVIS connects to AI model servers (like Ollama or LM Studio) on your local network.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>JARVIS plays songs from your music library when you ask.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>shortcuts</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>JARVIS uses the camera to take photos, scan documents and see what you show it in live voice mode.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
