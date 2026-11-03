@@ -1,0 +1,121 @@
+import Foundation
+
+/// User preferences, persisted to UserDefaults (API keys go to the Keychain).
+final class AppSettings: ObservableObject {
+    static let shared = AppSettings()
+
+    private let defaults = UserDefaults.standard
+
+    // MARK: Provider & models
+
+    @Published var provider: ProviderKind { didSet { defaults.set(provider.rawValue, forKey: "provider") } }
+
+    @Published var geminiAPIKey: String { didSet { KeychainStore.set(geminiAPIKey, for: "gemini") } }
+    @Published var claudeAPIKey: String { didSet { KeychainStore.set(claudeAPIKey, for: "claude") } }
+
+    /// Empty string = pick automatically from the models available to the key.
+    @Published var geminiChatModel: String { didSet { defaults.set(geminiChatModel, forKey: "geminiChatModel") } }
+    @Published var geminiImageModel: String { didSet { defaults.set(geminiImageModel, forKey: "geminiImageModel") } }
+    @Published var geminiTTSModel: String { didSet { defaults.set(geminiTTSModel, forKey: "geminiTTSModel") } }
+    @Published var geminiVoiceName: String { didSet { defaults.set(geminiVoiceName, forKey: "geminiVoiceName") } }
+
+    @Published var claudeModel: String { didSet { defaults.set(claudeModel, forKey: "claudeModel") } }
+    /// low / medium / high / xhigh / max
+    @Published var claudeEffort: String { didSet { defaults.set(claudeEffort, forKey: "claudeEffort") } }
+    /// Server-side refusal fallback on models that support it.
+    @Published var claudeRefusalFallback: Bool { didSet { defaults.set(claudeRefusalFallback, forKey: "claudeRefusalFallback") } }
+
+    // MARK: Claude Code (subscription) – macOS
+
+    @Published var claudeCodePath: String { didSet { defaults.set(claudeCodePath, forKey: "claudeCodePath") } }
+    @Published var claudeCodeModel: String { didSet { defaults.set(claudeCodeModel, forKey: "claudeCodeModel") } }
+    @Published var claudeCodeAllowBash: Bool { didSet { defaults.set(claudeCodeAllowBash, forKey: "claudeCodeAllowBash") } }
+
+    // MARK: Personality
+
+    @Published var userName: String { didSet { defaults.set(userName, forKey: "userName") } }
+    @Published var customInstructions: String { didSet { defaults.set(customInstructions, forKey: "customInstructions") } }
+
+    // MARK: Voice
+
+    @Published var speakReplies: Bool { didSet { defaults.set(speakReplies, forKey: "speakReplies") } }
+    @Published var handsFree: Bool { didSet { defaults.set(handsFree, forKey: "handsFree") } }
+    @Published var voiceIdentifier: String { didSet { defaults.set(voiceIdentifier, forKey: "voiceIdentifier") } }
+    @Published var speechRate: Double { didSet { defaults.set(speechRate, forKey: "speechRate") } }
+    /// Empty = system language.
+    @Published var recognitionLocale: String { didSet { defaults.set(recognitionLocale, forKey: "recognitionLocale") } }
+
+    // MARK: Agent behaviour
+
+    @Published var maxAgentSteps: Int { didSet { defaults.set(maxAgentSteps, forKey: "maxAgentSteps") } }
+    /// macOS: run shell/AppleScript actions without asking first.
+    @Published var autoApproveActions: Bool { didSet { defaults.set(autoApproveActions, forKey: "autoApproveActions") } }
+    @Published var hapticsEnabled: Bool { didSet { defaults.set(hapticsEnabled, forKey: "hapticsEnabled") } }
+
+    // MARK: iOS
+
+    @Published var appLockEnabled: Bool { didSet { defaults.set(appLockEnabled, forKey: "appLockEnabled") } }
+
+    // MARK: macOS screen watch
+
+    @Published var watchInterval: Double { didSet { defaults.set(watchInterval, forKey: "watchInterval") } }
+    @Published var watchNotifications: Bool { didSet { defaults.set(watchNotifications, forKey: "watchNotifications") } }
+    @Published var watchSpeakSuggestions: Bool { didSet { defaults.set(watchSpeakSuggestions, forKey: "watchSpeakSuggestions") } }
+    @Published var watchFocus: String { didSet { defaults.set(watchFocus, forKey: "watchFocus") } }
+    /// Comma separated app names that are never captured.
+    @Published var privacyBlocklist: String { didSet { defaults.set(privacyBlocklist, forKey: "privacyBlocklist") } }
+    @Published var workspacePath: String { didSet { defaults.set(workspacePath, forKey: "workspacePath") } }
+
+    private init() {
+        let d = UserDefaults.standard
+        provider = ProviderKind(rawValue: d.string(forKey: "provider") ?? "") ?? .gemini
+        geminiAPIKey = KeychainStore.get("gemini")
+        claudeAPIKey = KeychainStore.get("claude")
+        geminiChatModel = d.string(forKey: "geminiChatModel") ?? ""
+        geminiImageModel = d.string(forKey: "geminiImageModel") ?? ""
+        geminiTTSModel = d.string(forKey: "geminiTTSModel") ?? ""
+        geminiVoiceName = d.string(forKey: "geminiVoiceName") ?? "Charon"
+        claudeModel = d.string(forKey: "claudeModel") ?? ClaudeClient.defaultModel
+        claudeEffort = d.string(forKey: "claudeEffort") ?? "medium"
+        claudeRefusalFallback = d.object(forKey: "claudeRefusalFallback") as? Bool ?? true
+        claudeCodePath = d.string(forKey: "claudeCodePath") ?? ""
+        claudeCodeModel = d.string(forKey: "claudeCodeModel") ?? ""
+        claudeCodeAllowBash = d.object(forKey: "claudeCodeAllowBash") as? Bool ?? false
+        userName = d.string(forKey: "userName") ?? ""
+        customInstructions = d.string(forKey: "customInstructions") ?? ""
+        speakReplies = d.object(forKey: "speakReplies") as? Bool ?? false
+        handsFree = d.object(forKey: "handsFree") as? Bool ?? false
+        voiceIdentifier = d.string(forKey: "voiceIdentifier") ?? ""
+        speechRate = d.object(forKey: "speechRate") as? Double ?? 0.5
+        recognitionLocale = d.string(forKey: "recognitionLocale") ?? ""
+        maxAgentSteps = d.object(forKey: "maxAgentSteps") as? Int ?? 15
+        autoApproveActions = d.object(forKey: "autoApproveActions") as? Bool ?? false
+        hapticsEnabled = d.object(forKey: "hapticsEnabled") as? Bool ?? true
+        appLockEnabled = d.object(forKey: "appLockEnabled") as? Bool ?? false
+        watchInterval = d.object(forKey: "watchInterval") as? Double ?? 90
+        watchNotifications = d.object(forKey: "watchNotifications") as? Bool ?? true
+        watchSpeakSuggestions = d.object(forKey: "watchSpeakSuggestions") as? Bool ?? false
+        watchFocus = d.string(forKey: "watchFocus") ?? ""
+        privacyBlocklist = d.string(forKey: "privacyBlocklist") ?? "1Password, Keychain Access, Bitwarden, Passwords"
+        workspacePath = d.string(forKey: "workspacePath") ?? ""
+    }
+
+    var hasGeminiKey: Bool { !geminiAPIKey.isEmpty }
+    var hasClaudeKey: Bool { !claudeAPIKey.isEmpty }
+
+    /// True when the selected provider has what it needs to run.
+    var isProviderConfigured: Bool {
+        switch provider {
+        case .gemini: return hasGeminiKey
+        case .claude: return hasClaudeKey
+        case .claudeCode: return true
+        }
+    }
+
+    var blockedApps: [String] {
+        privacyBlocklist
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+    }
+}

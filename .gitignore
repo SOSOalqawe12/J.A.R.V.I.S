@@ -1,0 +1,14 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+dist/
+dmg/
+*.ipa
+*.dSYM.zip
+*.dSYM
+.swiftpm/
+.DS_Store
+__pycache__/

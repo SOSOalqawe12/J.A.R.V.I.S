@@ -1,0 +1,89 @@
+name: Build JARVIS
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build iOS IPA + macOS app
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install tools
+        run: |
+          brew install xcodegen
+          command -v xcbeautify >/dev/null || brew install xcbeautify
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build iOS app (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project JARVIS.xcodeproj \
+            -scheme JARVIS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | xcbeautify --renderer github-actions
+
+      - name: Package IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/JARVIS.app dist/Payload/
+          (cd dist && zip -qry JARVIS-iOS-unsigned.ipa Payload && rm -rf Payload)
+          ls -lh dist
+
+      - name: Build macOS app (ad-hoc signed)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project JARVIS.xcodeproj \
+            -scheme JARVISMac \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            build | xcbeautify --renderer github-actions
+
+      - name: Package macOS app
+        run: |
+          APP=build/Build/Products/Release/JARVIS.app
+          codesign --force --deep --sign - "$APP"
+          ditto -c -k --keepParent "$APP" dist/JARVIS-macOS.zip
+          mkdir -p dmg && cp -R "$APP" dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname JARVIS -srcfolder dmg -ov -format UDZO dist/JARVIS-macOS.dmg
+          ls -lh dist
+
+      - name: Upload builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARVIS-builds
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
