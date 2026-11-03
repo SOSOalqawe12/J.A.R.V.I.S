@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
 import Carbon.HIToolbox
+import Combine
+import UserNotifications
 
 @main
 struct JarvisMacApp: App {
@@ -50,7 +52,27 @@ struct JarvisMacApp: App {
 
 @MainActor
 final class MacAppDelegate: NSObject, NSApplicationDelegate {
+    private var cancellables: Set<AnyCancellable> = []
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = NotificationPresenter.shared
+
+        // "Hey JARVIS" while the app is running.
+        WakeWordListener.shared.onWake = { command in
+            CommandPanel.shared.show()
+            if command.isEmpty {
+                ChatViewModel.shared.toggleListening()
+            } else {
+                ChatViewModel.shared.send(command)
+            }
+        }
+        AppSettings.shared.$wakeWordEnabled
+            .removeDuplicates()
+            .sink { enabled in
+                Task { @MainActor in WakeWordListener.shared.setEnabled(enabled) }
+            }
+            .store(in: &cancellables)
+
         // Writing to a pipe of a process that already exited must not kill the app.
         signal(SIGPIPE, SIG_IGN)
 

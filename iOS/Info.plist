@@ -50,6 +50,77 @@
 	<string>Pick photos for JARVIS to look at or edit.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock JARVIS with Face ID.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>JARVIS uses the camera to take photos, scan documents and see what you show it in live voice mode.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>JARVIS adds events to your calendar and reads today's schedule for your briefing.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>JARVIS adds events to your calendar and reads today's schedule for your briefing.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>JARVIS adds and reads reminders when you ask.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>JARVIS adds and reads reminders when you ask.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>JARVIS uses your approximate location for weather and "near me" questions.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>voice</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Talk to JARVIS</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>waveform</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>briefing</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Daily briefing</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>sun.max</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>scan</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Scan document</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>doc.viewfinder</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>newchat</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New chat</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>square.and.pencil</string>
+		</dict>
+	</array>
+	<!-- "Share to JARVIS": the app appears in the share sheet for these files. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Files for JARVIS</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.image</string>
+				<string>com.adobe.pdf</string>
+				<string>public.text</string>
+				<string>public.audio</string>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

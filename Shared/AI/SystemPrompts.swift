@@ -1,7 +1,8 @@
 import Foundation
 
+@MainActor
 enum SystemPrompts {
-    static func make(settings: AppSettings) -> String {
+    static func make(settings: AppSettings, mode: AssistantMode = .jarvis) -> String {
         #if os(macOS)
         let device = "Mac"
         let folder = "~/Documents/JARVIS (the user's \"JARVIS folder\")"
@@ -28,8 +29,16 @@ enum SystemPrompts {
         - Never claim you created or changed a file unless the tool succeeded. If a tool fails, explain briefly and try a sensible alternative.
         After creating files, reply in one or two short sentences naming what you made and where. Don't repeat the whole file content.
 
+        # Personal assistant
+        - Calendar: add_calendar_event / list_calendar_events. Reminders: add_reminder / list_reminders / complete_reminder.
+        - Timers and "remind me in 10 minutes" → set_timer (a notification). Dated to-dos → add_reminder.
+        - Weather → get_weather (Open-Meteo, uses the user's location if no place is given). get_current_location for "near me".
+        - Memory: when the user shares a lasting preference or personal fact, or says "remember", call remember. \
+        Use forget / recall_memories when asked. Never store passwords or card numbers.
+        - Text in photos, screenshots or scans → extract_text (fast, on-device).
+
         # Thinking and acting
-        - For current facts (news, prices, weather, scores) use web_search; to read a page use fetch_url.
+        - For current facts (news, prices, scores) use web_search; to read a page use fetch_url.
         - Use calculate for non-trivial arithmetic, get_date_time for dates and times.
         - Ask a short clarifying question only when a request is genuinely ambiguous; otherwise make sensible choices and go.
         - Keep spoken-style answers short: the user may be listening rather than reading.
@@ -53,13 +62,20 @@ enum SystemPrompts {
 
         # Your iPhone abilities
         - save_to_photos saves an image from the JARVIS folder into the Photos library.
-        - clipboard reads/writes the clipboard. open_url opens links, maps, phone or message URLs.
+        - clipboard reads/writes the clipboard. open_url opens links, maps (maps://?q=…), phone, messages or other apps.
+        - The user may talk to you by voice or through Siri; keep spoken replies short and natural.
         """
         #endif
 
         let name = settings.userName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty {
             prompt += "\n\nThe user's name is \(name)."
+        }
+        if let modeInstructions = mode.instructions {
+            prompt += "\n\n# Current mode: \(mode.title)\n\(modeInstructions)"
+        }
+        if let memories = MemoryStore.shared.promptSection {
+            prompt += "\n\n" + memories
         }
         let custom = settings.customInstructions.trimmingCharacters(in: .whitespacesAndNewlines)
         if !custom.isEmpty {
@@ -70,7 +86,7 @@ enum SystemPrompts {
 
     /// Volatile context goes in the user turn (never the system prompt) so the
     /// prompt prefix stays stable between requests.
-    static func turnContext(extra: String? = nil) -> String {
+    nonisolated static func turnContext(extra: String? = nil) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEEE d MMMM yyyy, HH:mm zzz"
         var context = "[Context – now: \(formatter.string(from: Date())); locale: \(Locale.current.identifier)"

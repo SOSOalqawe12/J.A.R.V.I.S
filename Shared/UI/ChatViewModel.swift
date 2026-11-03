@@ -9,10 +9,16 @@ final class ChatViewModel: ObservableObject {
     @Published var conversation: Conversation
     @Published private(set) var isRunning = false
     @Published private(set) var status = ""
+    @Published private(set) var streamingText: String?
     @Published var draft = ""
     @Published var pendingAttachments: [Attachment] = []
     @Published var includeScreen = false
     @Published private(set) var recentFiles: [String] = []
+    /// Classic (non-Live) hands-free loop used by voice mode.
+    @Published private(set) var voiceLoopActive = false
+    /// iOS capture sheets.
+    @Published var showScanner = false
+    @Published var showCamera = false
 
     let settings = AppSettings.shared
     let store = ConversationStore.shared
@@ -28,6 +34,11 @@ final class ChatViewModel: ObservableObject {
 
     private var runTask: Task<Void, Never>?
 
+    static let briefingPrompt = """
+    Give me my briefing: today's date, my calendar for today, my open reminders, the weather where I am, \
+    and three top news headlines. Keep it short and easy to listen to.
+    """
+
     private init() {
         conversation = Conversation(systemPrompt: SystemPrompts.make(settings: AppSettings.shared))
         speech.onAutoFinish = { [weak self] text in
@@ -40,19 +51,17 @@ final class ChatViewModel: ObservableObject {
 
     var allTools: [AgentTool] { Toolbox.sharedTools() + platformTools }
 
-    var orbMode: CoreOrbView.Mode {
-        if speech.isRecording { return .listening }
-        if isRunning { return .thinking }
-        if VoiceOutput.shared.isSpeaking { return .speaking }
-        return .idle
-    }
+    var currentMode: AssistantMode { AssistantMode(rawValue: conversation.mode ?? "") ?? .jarvis }
 
     // MARK: Conversations
 
-    func newConversation() {
+    func newConversation(mode: AssistantMode? = nil) {
         stop()
         store.save(conversation)
-        conversation = Conversation(systemPrompt: SystemPrompts.make(settings: settings))
+        let chosen = mode ?? .jarvis
+        var fresh = Conversation(systemPrompt: SystemPrompts.make(settings: settings, mode: chosen))
+        fresh.mode = chosen == .jarvis ? nil : chosen.rawValue
+        conversation = fresh
         recentFiles = []
         pendingAttachments = []
     }
@@ -72,6 +81,13 @@ final class ChatViewModel: ObservableObject {
         if id == conversation.id {
             conversation = Conversation(systemPrompt: SystemPrompts.make(settings: settings))
         }
+    }
+
+    /// Lets other features (Live voice, scanner) surface files they created.
+    func noteCreatedFiles(_ files: [String]) {
+        guard !files.isEmpty else { return }
+        recentFiles.insert(contentsOf: files, at: 0)
+        if recentFiles.count > 30 { recentFiles = Array(recentFiles.prefix(30)) }
     }
 
     // MARK: Sending
@@ -97,6 +113,23 @@ final class ChatViewModel: ObservableObject {
         runTask = Task { await self.runAgent() }
     }
 
+    /// Drops everything after the last user message and asks again.
+    func regenerate() {
+        guard !isRunning, let index = lastUserIndex else { return }
+        conversation.messages.removeSubrange((index + 1)...)
+        conversation.claudeCodeSessionID = nil
+        runTask = Task { await self.runAgent() }
+    }
+
+    var lastUserIndex: Int? {
+        conversation.messages.lastIndex { $0.role == .user && !$0.isLocalNotice }
+    }
+
+    var canRegenerate: Bool {
+        guard !isRunning, let index = lastUserIndex else { return false }
+        return conversation.messages[(index + 1)...].contains { $0.role == .assistant && !$0.isLocalNotice }
+    }
+
     func stop() {
         runTask?.cancel()
         runTask = nil
@@ -104,10 +137,18 @@ final class ChatViewModel: ObservableObject {
         if speech.isRecording { speech.stop() }
     }
 
+    // MARK: Voice
+
     func toggleListening() {
         VoiceOutput.shared.stop()
-        speech.autoFinishAfterSilence = settings.handsFree
-        speech.toggle(localeID: settings.recognitionLocale)
+        WakeWordListener.shared.pause()
+        speech.autoFinishAfterSilence = settings.handsFree || voiceLoopActive
+        if speech.isRecording {
+            speech.stop()
+            WakeWordListener.shared.resumeIfEnabled()
+        } else {
+            Task { await speech.start(localeID: settings.recognitionLocale) }
+        }
     }
 
     /// Sends what was dictated (push-to-talk mode).
@@ -117,6 +158,32 @@ final class ChatViewModel: ObservableObject {
         speech.stop()
         if !text.isEmpty { send(text) }
     }
+
+    /// Classic voice conversation: listen → answer → speak → listen again.
+    func startVoiceLoop(initialText: String? = nil) {
+        voiceLoopActive = true
+        WakeWordListener.shared.pause()
+        if let initialText, !initialText.isEmpty {
+            send(initialText)
+        } else {
+            listenForLoop()
+        }
+    }
+
+    func stopVoiceLoop() {
+        voiceLoopActive = false
+        speech.stop()
+        VoiceOutput.shared.stop()
+        WakeWordListener.shared.resumeIfEnabled()
+    }
+
+    private func listenForLoop() {
+        guard voiceLoopActive, !isRunning, !speech.isRecording else { return }
+        speech.autoFinishAfterSilence = true
+        Task { await speech.start(localeID: settings.recognitionLocale) }
+    }
+
+    // MARK: Running
 
     private func run(text: String, attachments: [Attachment], wantsScreen: Bool) async {
         isRunning = true
@@ -145,6 +212,7 @@ final class ChatViewModel: ObservableObject {
         defer {
             isRunning = false
             status = ""
+            streamingText = nil
             runTask = nil
         }
         let startCount = conversation.messages.count
@@ -158,6 +226,11 @@ final class ChatViewModel: ObservableObject {
                 sessionID: conversation.claudeCodeSessionID,
                 provider: provider,
                 maxSteps: settings.maxAgentSteps,
+                stream: settings.streamResponses,
+                onPartial: { [weak self] text in
+                    guard let self, self.isRunning else { return }
+                    self.streamingText = text
+                },
                 onMessage: { [weak self] message in self?.append(message) },
                 onStatus: { [weak self] text in self?.status = text }
             )
@@ -172,29 +245,43 @@ final class ChatViewModel: ObservableObject {
         } catch {
             Haptics.error()
             append(.notice("⚠️ \(error.localizedDescription)"))
+            if voiceLoopActive { VoiceOutput.shared.speak("Sorry, something went wrong. \(error.localizedDescription)") }
         }
         store.save(conversation)
     }
 
     private func append(_ message: ChatMessage) {
+        if message.role == .assistant && !message.isLocalNotice { streamingText = nil }
         conversation.messages.append(message)
         conversation.updated = Date()
         for result in message.toolResults where !result.files.isEmpty {
-            recentFiles.insert(contentsOf: result.files, at: 0)
+            noteCreatedFiles(result.files)
         }
-        if recentFiles.count > 30 { recentFiles = Array(recentFiles.prefix(30)) }
     }
 
     private func replyFinished(_ reply: String) {
-        guard settings.speakReplies || settings.handsFree, !reply.isEmpty else { return }
-        VoiceOutput.shared.speak(reply)
+        let wantsVoice = settings.speakReplies || settings.handsFree || voiceLoopActive
+        if wantsVoice, !reply.isEmpty {
+            VoiceOutput.shared.speak(reply)
+        } else if voiceLoopActive {
+            listenForLoop()
+        } else if !VoiceOutput.shared.isSpeaking {
+            WakeWordListener.shared.resumeIfEnabled()
+        }
     }
 
     private func voiceReplyFinished() {
+        if voiceLoopActive {
+            listenForLoop()
+            return
+        }
         // Hands-free: keep the conversation going.
-        guard settings.handsFree, !isRunning, !speech.isRecording else { return }
-        speech.autoFinishAfterSilence = true
-        Task { await speech.start(localeID: settings.recognitionLocale) }
+        if settings.handsFree, !isRunning, !speech.isRecording {
+            speech.autoFinishAfterSilence = true
+            Task { await speech.start(localeID: settings.recognitionLocale) }
+            return
+        }
+        WakeWordListener.shared.resumeIfEnabled()
     }
 
     // MARK: Attachments
@@ -229,13 +316,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     static let quickPrompts: [QuickPrompt] = [
-        QuickPrompt("doc.text", "Make a packing list for a 3-day trip to Paris"),
+        QuickPrompt("sun.max", "Brief me: calendar, reminders, weather and news"),
         QuickPrompt("photo", "Draw a futuristic neon city wallpaper for my phone"),
         QuickPrompt("doc.richtext", "Write a one-page PDF cover letter for a junior designer job"),
+        QuickPrompt("calendar.badge.plus", "Add lunch with Sam tomorrow at 1pm to my calendar"),
+        QuickPrompt("timer", "Set a 10 minute tea timer"),
+        QuickPrompt("doc.text", "Make a packing list for a 3-day trip to Paris"),
         QuickPrompt("chart.bar", "Make a bar chart of my week: Mon 3h, Tue 5h, Wed 2h, Thu 6h, Fri 4h"),
-        QuickPrompt("waveform", "Record a 30-second calming bedtime story as audio"),
-        QuickPrompt("qrcode", "Create a QR code for https://apple.com"),
-        QuickPrompt("calendar", "Create a calendar event file for dinner Friday at 8pm"),
-        QuickPrompt("chevron.left.forwardslash.chevron.right", "Build a small HTML page with a working calculator")
+        QuickPrompt("waveform", "Record a 30-second calming bedtime story as audio")
     ]
 }

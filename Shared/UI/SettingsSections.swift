@@ -40,6 +40,7 @@ struct AIProviderSettingsSections: View {
                     modelPicker("Chat model", selection: $settings.geminiChatModel, options: GeminiModelPicker.candidates(geminiModels, for: .chat).map(\.id))
                     modelPicker("Image model", selection: $settings.geminiImageModel, options: GeminiModelPicker.candidates(geminiModels, for: .image).map(\.id))
                     modelPicker("Speech model", selection: $settings.geminiTTSModel, options: GeminiModelPicker.candidates(geminiModels, for: .tts).map(\.id))
+                    modelPicker("Live voice model", selection: $settings.geminiLiveModel, options: GeminiModelPicker.candidates(geminiModels, for: .live).map(\.id))
                     Picker("Audio file voice", selection: $settings.geminiVoiceName) {
                         ForEach(AIProviderSettingsSections.geminiVoices, id: \.self) { Text($0).tag($0) }
                     }
@@ -75,6 +76,7 @@ struct AIProviderSettingsSections: View {
             }
 
             Section {
+                Toggle("Stream replies as they're written", isOn: $settings.streamResponses)
                 Button {
                     Task { await testConnection() }
                 } label: {
@@ -174,7 +176,15 @@ struct VoiceSettingsSection: View {
         Section {
             Toggle("Speak replies", isOn: $settings.speakReplies)
             Toggle("Hands-free conversation", isOn: $settings.handsFree)
-            Picker("Voice", selection: $settings.voiceIdentifier) {
+            Picker("Reply voice", selection: $settings.voiceEngine) {
+                Text("Natural (Gemini \(settings.geminiVoiceName))").tag("natural")
+                Text("Device voice").tag("device")
+            }
+            #if os(iOS)
+            Toggle("Real-time Live voice mode", isOn: $settings.liveVoiceEnabled)
+            #endif
+            Toggle("Listen for “Hey JARVIS” while open", isOn: $settings.wakeWordEnabled)
+            Picker("Device voice", selection: $settings.voiceIdentifier) {
                 Text("Automatic (best for language)").tag("")
                 ForEach(voices, id: \.identifier) { voice in
                     Text("\(voice.name) – \(voice.language)\(voice.quality == .enhanced || voice.quality == .premium ? " ★" : "")")
@@ -197,7 +207,7 @@ struct VoiceSettingsSection: View {
         } header: {
             Text("Voice")
         } footer: {
-            Text("Hands-free: after JARVIS answers it listens again automatically and sends when you pause. Download enhanced voices in Settings › Accessibility › Spoken Content › Voices for a richer sound.")
+            Text("Natural voice uses Gemini's neural speech (needs a Gemini key). Live voice mode streams audio both ways in real time – interrupt any time, show things with the camera. Hands-free: JARVIS listens again after answering. The wake word works only while JARVIS is open and uses on-device recognition when available.")
         }
     }
 }
@@ -220,6 +230,45 @@ struct PersonalizationSection: View {
             Text("Personalisation")
         } footer: {
             Text("e.g. \"Always answer in Arabic\", \"I'm a teacher – make worksheets printable\". Applies to new conversations.")
+        }
+    }
+}
+
+/// Long-term memory management.
+struct MemorySettingsSection: View {
+    @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var memory = MemoryStore.shared
+    @State private var newFact = ""
+
+    var body: some View {
+        Section {
+            Toggle("Use memory", isOn: $settings.memoryEnabled)
+            ForEach(memory.items.reversed()) { item in
+                Text(item.text)
+                    .font(.callout)
+                    .contextMenu {
+                        Button(role: .destructive) { memory.remove(item.id) } label: { Label("Forget", systemImage: "trash") }
+                    }
+            }
+            .onDelete { offsets in
+                let items = Array(memory.items.reversed())
+                for index in offsets { memory.remove(items[index].id) }
+            }
+            HStack {
+                TextField("Add something to remember", text: $newFact)
+                Button("Add") {
+                    memory.add(newFact)
+                    newFact = ""
+                }
+                .disabled(newFact.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if !memory.items.isEmpty {
+                Button("Forget everything", role: .destructive) { memory.clear() }
+            }
+        } header: {
+            Text("Memory (\(memory.items.count))")
+        } footer: {
+            Text("JARVIS remembers preferences and facts you share (\"remember that I'm vegetarian\"). Stored only on this device; used in new conversations.")
         }
     }
 }

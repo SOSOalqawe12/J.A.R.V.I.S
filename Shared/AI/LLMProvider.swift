@@ -27,6 +27,14 @@ protocol LLMProvider {
     var kind: ProviderKind { get }
     var modelName: String { get }
     func complete(_ request: LLMRequest) async throws -> LLMReply
+    /// Streams visible text as it is generated (default: no streaming).
+    func completeStreaming(_ request: LLMRequest, onPartial: @escaping (String) -> Void) async throws -> LLMReply
+}
+
+extension LLMProvider {
+    func completeStreaming(_ request: LLMRequest, onPartial: @escaping (String) -> Void) async throws -> LLMReply {
+        try await complete(request)
+    }
 }
 
 enum LLMError: LocalizedError {

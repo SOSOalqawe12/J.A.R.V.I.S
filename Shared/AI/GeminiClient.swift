@@ -29,6 +29,42 @@ struct GeminiClient {
         return try await HTTP.send(request, errorParser: GeminiClient.errorMessage)
     }
 
+    /// Server-sent-events streaming; calls `onChunk` with each partial response.
+    func streamGenerateContent(model: String, body: JSONValue, onChunk: (JSONValue) -> Void) async throws {
+        guard !apiKey.isEmpty else { throw LLMError.missingAPIKey(.gemini) }
+        let name = GeminiClient.cleanModelName(model)
+        guard let url = URL(string: "\(GeminiClient.baseURL)/models/\(name):streamGenerateContent?alt=sse") else {
+            throw LLMError.invalidResponse("bad model name \(name)")
+        }
+        let request = HTTP.jsonRequest(url: url, headers: headers, body: body)
+        for attempt in 0..<3 {
+            let (bytes, response) = try await HTTP.session.bytes(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status) else {
+                var data = Data()
+                for try await byte in bytes {
+                    data.append(byte)
+                    if data.count > 64_000 { break }
+                }
+                let message = (try? JSONValue.parse(data)).flatMap(GeminiClient.errorMessage)
+                    ?? String(decoding: data.prefix(500), as: UTF8.self)
+                if [429, 500, 503].contains(status), attempt < 2 {
+                    try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
+                    continue
+                }
+                throw LLMError.http(status: status, message: message)
+            }
+            for try await line in bytes.lines {
+                guard line.hasPrefix("data:") else { continue }
+                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                guard !payload.isEmpty, let json = try? JSONValue.parse(payload) else { continue }
+                if let message = GeminiClient.errorMessage(json) { throw LLMError.http(status: 500, message: message) }
+                onChunk(json)
+            }
+            return
+        }
+    }
+
     // MARK: Models
 
     func listModels() async throws -> [GeminiModelInfo] {
@@ -179,13 +215,14 @@ struct GeminiModelInfo: Hashable, Identifiable {
 }
 
 enum GeminiModelRole {
-    case chat, image, tts
+    case chat, image, tts, live
 }
 
 enum GeminiModelPicker {
     static let fallbackChat = "gemini-flash-latest"
     static let fallbackImage = "gemini-2.5-flash-image"
     static let fallbackTTS = "gemini-2.5-flash-preview-tts"
+    static let fallbackLive = "gemini-2.5-flash-native-audio-preview-09-2025"
 
     static func version(of name: String) -> Double {
         for component in name.split(separator: "-").dropFirst() {
@@ -195,6 +232,9 @@ enum GeminiModelPicker {
     }
 
     static func candidates(_ models: [GeminiModelInfo], for role: GeminiModelRole) -> [GeminiModelInfo] {
+        if role == .live {
+            return models.filter { $0.methods.contains("bidiGenerateContent") && $0.id.hasPrefix("gemini-") }
+        }
         let usable = models.filter { $0.supportsGenerateContent && $0.id.hasPrefix("gemini-") }
         switch role {
         case .chat:
@@ -204,6 +244,8 @@ enum GeminiModelPicker {
             return usable.filter { $0.id.contains("image") }
         case .tts:
             return usable.filter { $0.id.contains("tts") }
+        case .live:
+            return []
         }
     }
 
@@ -225,6 +267,12 @@ enum GeminiModelPicker {
             if name.contains("flash") { score += 2 }
             if name.contains("lite") { score -= 3 }
             if !preview { score += 3 }
+        case .live:
+            if name.contains("native-audio") || name.contains("audio") { score += 5 }
+            if name.contains("flash") { score += 2 }
+            if name.contains("lite") { score -= 3 }
+            if name.contains("thinking") { score -= 1 }
+            if !preview { score += 1 }
         }
         return score
     }
@@ -238,6 +286,7 @@ enum GeminiModelPicker {
         case .chat: return fallbackChat
         case .image: return fallbackImage
         case .tts: return fallbackTTS
+        case .live: return fallbackLive
         }
     }
 }
@@ -273,7 +322,7 @@ struct GeminiProvider: LLMProvider {
     var kind: ProviderKind { .gemini }
     var modelName: String { model }
 
-    func complete(_ request: LLMRequest) async throws -> LLMReply {
+    func makeBody(_ request: LLMRequest) -> JSONValue {
         var body: [String: JSONValue] = [
             "contents": .array(GeminiProvider.contents(from: request.messages, model: model))
         ]
@@ -283,8 +332,20 @@ struct GeminiProvider: LLMProvider {
         if !request.tools.isEmpty {
             body["tools"] = [["functionDeclarations": .array(request.tools.map(GeminiProvider.declaration))]]
         }
-        let json = try await client.generateContent(model: model, body: .object(body))
+        return .object(body)
+    }
+
+    func complete(_ request: LLMRequest) async throws -> LLMReply {
+        let json = try await client.generateContent(model: model, body: makeBody(request))
         return try GeminiProvider.parseReply(json, model: model)
+    }
+
+    func completeStreaming(_ request: LLMRequest, onPartial: @escaping (String) -> Void) async throws -> LLMReply {
+        var accumulator = GeminiStreamAccumulator()
+        try await client.streamGenerateContent(model: model, body: makeBody(request)) { chunk in
+            if accumulator.add(chunk) { onPartial(accumulator.visibleText) }
+        }
+        return try GeminiProvider.parseReply(accumulator.response(model: model), model: model)
     }
 
     static func declaration(_ tool: ToolSpec) -> JSONValue {
@@ -425,6 +486,64 @@ struct GeminiProvider: LLMProvider {
             stopReason: finish,
             notice: finish == "MAX_TOKENS" ? "The reply was cut off because it hit the length limit." : nil
         )
+    }
+}
+
+// MARK: - Streaming accumulator
+
+/// Merges streamed Gemini chunks into one response (text deltas are joined,
+/// function calls and thought signatures are kept intact for replay).
+struct GeminiStreamAccumulator {
+    private(set) var parts: [JSONValue] = []
+    private(set) var finishReason: String?
+    private(set) var modelVersion: String?
+    private(set) var blockReason: String?
+
+    var visibleText: String {
+        parts.filter { $0["thought"]?.boolValue != true && $0["functionCall"] == nil }
+            .compactMap { $0["text"]?.stringValue }
+            .joined()
+    }
+
+    private static func isPlainText(_ part: JSONValue) -> Bool {
+        part["text"] != nil && part["functionCall"] == nil && part["thought"]?.boolValue != true
+    }
+
+    /// Returns true when the visible text changed.
+    @discardableResult
+    mutating func add(_ chunk: JSONValue) -> Bool {
+        if let version = chunk["modelVersion"]?.stringValue { modelVersion = version }
+        if let reason = chunk["promptFeedback"]?["blockReason"]?.stringValue { blockReason = reason }
+        guard let candidate = chunk["candidates"]?[0] else { return false }
+        if let finish = candidate["finishReason"]?.stringValue { finishReason = finish }
+        var changed = false
+        for part in candidate["content"]?["parts"]?.arrayValue ?? [] {
+            let text = part["text"]?.stringValue
+            if GeminiStreamAccumulator.isPlainText(part), let text,
+               let last = parts.indices.last, GeminiStreamAccumulator.isPlainText(parts[last]),
+               parts[last]["thoughtSignature"] == nil {
+                var merged = parts[last].objectValue ?? [:]
+                merged["text"] = .string((merged["text"]?.stringValue ?? "") + text)
+                if let signature = part["thoughtSignature"] { merged["thoughtSignature"] = signature }
+                parts[last] = .object(merged)
+                if !text.isEmpty { changed = true }
+            } else {
+                parts.append(part)
+                if GeminiStreamAccumulator.isPlainText(part), let text, !text.isEmpty { changed = true }
+            }
+        }
+        return changed
+    }
+
+    func response(model: String) -> JSONValue {
+        var root: [String: JSONValue] = ["modelVersion": .string(modelVersion ?? model)]
+        if !parts.isEmpty || finishReason != nil {
+            var candidate: [String: JSONValue] = ["content": ["role": "model", "parts": .array(parts)]]
+            if let finishReason { candidate["finishReason"] = .string(finishReason) }
+            root["candidates"] = [.object(candidate)]
+        }
+        if let blockReason { root["promptFeedback"] = ["blockReason": .string(blockReason)] }
+        return .object(root)
     }
 }
 

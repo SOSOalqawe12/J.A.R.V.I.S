@@ -212,6 +212,20 @@ struct MessageRow: View {
     let message: ChatMessage
     var onOpen: (URL) -> Void
     var onRetry: (() -> Void)?
+    var onRegenerate: (() -> Void)?
+
+    @ViewBuilder
+    private var actions: some View {
+        let text = message.visibleText
+        if !text.isEmpty {
+            Button { Clipboard.copy(text) } label: { Label("Copy", systemImage: "doc.on.doc") }
+            Button { VoiceOutput.shared.speak(text) } label: { Label("Read aloud", systemImage: "speaker.wave.2") }
+            ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
+        }
+        if let onRegenerate {
+            Button(action: onRegenerate) { Label("Regenerate", systemImage: "arrow.clockwise") }
+        }
+    }
 
     var body: some View {
         if message.isLocalNotice {
@@ -258,6 +272,7 @@ struct MessageRow: View {
                         .padding(.vertical, 10)
                         .background(Theme.userBubble)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .contextMenu { actions }
                 }
             }
         }
@@ -272,9 +287,20 @@ struct MessageRow: View {
                 if !text.isEmpty {
                     MarkdownText(text: text)
                         .foregroundColor(Theme.text)
+                        .contextMenu { actions }
                 }
                 ForEach(message.toolCalls) { call in
                     ToolCallChip(call: call)
+                }
+                if let onRegenerate, !text.isEmpty {
+                    HStack(spacing: 14) {
+                        Button { VoiceOutput.shared.speak(text) } label: { Image(systemName: "speaker.wave.2") }
+                        Button { Clipboard.copy(text) } label: { Image(systemName: "doc.on.doc") }
+                        Button(action: onRegenerate) { Image(systemName: "arrow.clockwise") }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundColor(Theme.secondaryText)
                 }
             }
             Spacer(minLength: 24)
@@ -333,6 +359,14 @@ struct ToolCallChip: View {
         case "run_applescript": return "applescript"
         case "delete_file": return "trash"
         case "calculate": return "function"
+        case "add_calendar_event", "list_calendar_events": return "calendar"
+        case "add_reminder", "list_reminders", "complete_reminder": return "checklist"
+        case "get_weather": return "cloud.sun"
+        case "get_current_location": return "location"
+        case "set_timer": return "timer"
+        case "remember", "forget", "recall_memories": return "brain"
+        case "extract_text": return "text.viewfinder"
+        case "save_to_photos": return "photo.badge.plus"
         default: return "gearshape"
         }
     }
@@ -387,6 +421,22 @@ struct AttachmentPreview: View {
                 .font(.caption)
                 .padding(8)
                 .hudPanel(cornerRadius: 10)
+        }
+    }
+}
+
+/// The reply as it streams in.
+struct StreamingBubble: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            CoreOrbView(mode: .thinking, size: 26)
+                .padding(.top, 2)
+            (Text(MarkdownText.attributed(text)) + Text(" ▍").foregroundColor(Theme.accent))
+                .foregroundColor(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 24)
         }
     }
 }

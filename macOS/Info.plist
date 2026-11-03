@@ -34,6 +34,18 @@
 	<string>JARVIS controls other apps (Safari, Notes, Music, Finder…) only when you approve an action.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>JARVIS looks at your screen to understand what you're doing and suggest next steps.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>JARVIS adds events to your calendar and reads your schedule when you ask.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>JARVIS adds events to your calendar and reads your schedule when you ask.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>JARVIS adds and reads reminders when you ask.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>JARVIS adds and reads reminders when you ask.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>JARVIS uses your approximate location for weather questions.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>JARVIS uses your approximate location for weather questions.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

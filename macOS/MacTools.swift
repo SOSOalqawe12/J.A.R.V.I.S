@@ -19,14 +19,7 @@ enum MacTools {
 
 enum MacNotifier {
     static func post(title: String, body: String) async {
-        let center = UNUserNotificationCenter.current()
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        guard granted else { return }
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        await Notifier.post(title: title, body: body)
     }
 }
 

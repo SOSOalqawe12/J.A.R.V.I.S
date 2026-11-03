@@ -21,37 +21,14 @@ struct WorkspaceBrowserView: View {
     @State private var newFolderName = ""
     @State private var showImporter = false
     @State private var deleteTarget: Workspace.Item?
+    @AppStorage("jarvis.filesGrid") private var gridMode = false
 
     private var workspace: Workspace { Workspace.shared }
     private var isRoot: Bool { folder.standardizedFileURL == workspace.root.standardizedFileURL }
 
     var body: some View {
-        List {
-            if items.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "tray").font(.largeTitle).foregroundColor(Theme.accent)
-                    Text("Nothing here yet").font(.headline)
-                    Text("Ask JARVIS to make something and it will appear here.")
-                        .font(.footnote).foregroundColor(.secondary).multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
-                .listRowBackground(Color.clear)
-            }
-            ForEach(items) { item in
-                Group {
-                    if item.isDirectory {
-                        NavigationLink(value: item.url) { row(item) }
-                    } else {
-                        Button { previewURL = item.url } label: { row(item) }
-                            .buttonStyle(.plain)
-                    }
-                }
-                .contextMenu { menu(for: item) }
-                .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) { deleteTarget = item } label: { Label("Delete", systemImage: "trash") }
-                }
-            }
+        Group {
+            if gridMode { grid } else { list }
         }
         .navigationTitle(isRoot ? "JARVIS Files" : folder.lastPathComponent)
         .toolbar { toolbar }
@@ -101,6 +78,82 @@ struct WorkspaceBrowserView: View {
                 }
                 deleteTarget = nil
                 reload()
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "tray").font(.largeTitle).foregroundColor(Theme.accent)
+            Text("Nothing here yet").font(.headline)
+            Text("Ask JARVIS to make something and it will appear here.")
+                .font(.footnote).foregroundColor(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+    }
+
+    private var grid: some View {
+        ScrollView {
+            if items.isEmpty { emptyState }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 14) {
+                ForEach(items) { item in
+                    Group {
+                        if item.isDirectory {
+                            NavigationLink(value: item.url) { tile(item) }
+                        } else {
+                            Button { previewURL = item.url } label: { tile(item) }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { menu(for: item) }
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func tile(_ item: Workspace.Item) -> some View {
+        VStack(spacing: 6) {
+            Group {
+                if item.isDirectory {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(Theme.accent)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Theme.panel)
+                } else {
+                    FileThumbnail(url: item.url, maxPixel: 300)
+                }
+            }
+            .frame(width: 104, height: 104)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Text(item.name)
+                .font(.caption2)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(width: 104)
+        }
+    }
+
+    private var list: some View {
+        List {
+            if items.isEmpty {
+                emptyState.listRowBackground(Color.clear)
+            }
+            ForEach(items) { item in
+                Group {
+                    if item.isDirectory {
+                        NavigationLink(value: item.url) { row(item) }
+                    } else {
+                        Button { previewURL = item.url } label: { row(item) }
+                            .buttonStyle(.plain)
+                    }
+                }
+                .contextMenu { menu(for: item) }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) { deleteTarget = item } label: { Label("Delete", systemImage: "trash") }
+                }
             }
         }
     }
@@ -168,6 +221,9 @@ struct WorkspaceBrowserView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
+                Button { gridMode.toggle() } label: {
+                    Label(gridMode ? "Show as list" : "Show as gallery", systemImage: gridMode ? "list.bullet" : "square.grid.2x2")
+                }
                 Button { showNewFolder = true } label: { Label("New folder", systemImage: "folder.badge.plus") }
                 Button { showImporter = true } label: { Label("Import files", systemImage: "square.and.arrow.down") }
                 #if os(iOS)

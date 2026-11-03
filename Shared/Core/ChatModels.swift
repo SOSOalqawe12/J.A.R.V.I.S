@@ -155,6 +155,8 @@ struct Conversation: Codable, Identifiable, Hashable {
     /// Session id when chatting through the Claude Code CLI.
     var claudeCodeSessionID: String?
     var origin: String?
+    /// AssistantMode raw value (nil = default JARVIS).
+    var mode: String?
 }
 
 struct ConversationSummary: Codable, Identifiable, Hashable {

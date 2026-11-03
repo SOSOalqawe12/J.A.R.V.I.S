@@ -43,6 +43,7 @@ struct ToolContext {
         case .chat: preferred = settings.geminiChatModel
         case .image: preferred = settings.geminiImageModel
         case .tts: preferred = settings.geminiTTSModel
+        case .live: preferred = settings.geminiLiveModel
         }
         return await GeminiModelCatalog.shared.resolve(role, preferred: preferred, apiKey: settings.geminiAPIKey)
     }
@@ -118,7 +119,19 @@ enum Toolbox {
             DownloadFileTool(),
             ClipboardTool(),
             DateTimeTool(),
-            CalculatorTool()
+            CalculatorTool(),
+            ExtractTextTool(),
+            AddCalendarEventTool(),
+            ListCalendarEventsTool(),
+            AddReminderTool(),
+            ListRemindersTool(),
+            CompleteReminderTool(),
+            WeatherTool(),
+            CurrentLocationTool(),
+            SetTimerTool(),
+            RememberTool(),
+            ForgetTool(),
+            RecallTool()
         ]
     }
 }

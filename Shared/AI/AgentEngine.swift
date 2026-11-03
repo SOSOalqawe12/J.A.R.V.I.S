@@ -48,6 +48,8 @@ final class AgentEngine {
         sessionID: String?,
         provider: LLMProvider,
         maxSteps: Int,
+        stream: Bool = false,
+        onPartial: @escaping @MainActor (String) -> Void = { _ in },
         onMessage: (ChatMessage) -> Void,
         onStatus: (String) -> Void
     ) async throws -> String? {
@@ -59,7 +61,14 @@ final class AgentEngine {
             try Task.checkCancellation()
             onStatus(step == 0 ? "Thinking…" : "Reviewing results…")
             let request = LLMRequest(system: system, messages: history, tools: specs, sessionID: session)
-            let reply = try await provider.complete(request)
+            let reply: LLMReply
+            if stream {
+                reply = try await provider.completeStreaming(request) { @Sendable text in
+                    Task { @MainActor in onPartial(text) }
+                }
+            } else {
+                reply = try await provider.complete(request)
+            }
             try Task.checkCancellation()
             if let newSession = reply.sessionID { session = newSession }
 

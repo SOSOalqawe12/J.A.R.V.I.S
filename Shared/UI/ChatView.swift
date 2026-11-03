@@ -9,16 +9,19 @@ struct ChatView: View {
     @ObservedObject private var voice = VoiceOutput.shared
     @ObservedObject private var settings = AppSettings.shared
     var onOpenSettings: () -> Void = {}
+    /// Opens the full-screen voice mode (iOS). Nil = use the mic button only.
+    var onStartVoice: (() -> Void)?
 
     @State private var previewURL: URL?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
     @FocusState private var inputFocused: Bool
 
-    init(vm: ChatViewModel, onOpenSettings: @escaping () -> Void = {}) {
+    init(vm: ChatViewModel, onOpenSettings: @escaping () -> Void = {}, onStartVoice: (() -> Void)? = nil) {
         self.vm = vm
         self._speech = ObservedObject(wrappedValue: vm.speech)
         self.onOpenSettings = onOpenSettings
+        self.onStartVoice = onStartVoice
     }
 
     var body: some View {
@@ -47,6 +50,26 @@ struct ChatView: View {
                 photoItems = []
             }
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $vm.showScanner) {
+            DocumentScannerView { images in
+                vm.showScanner = false
+                Task { await ScanSaver.save(images, into: vm) }
+            } onCancel: {
+                vm.showScanner = false
+            }
+            .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $vm.showCamera) {
+            CameraPicker { image in
+                vm.showCamera = false
+                if let image, let data = image.jpegData(compressionQuality: 0.9) {
+                    vm.attach(data: data, name: "Camera.jpg", mimeType: "image/jpeg")
+                }
+            }
+            .ignoresSafeArea()
+        }
+        #endif
     }
 
     // MARK: Setup banner
@@ -80,9 +103,14 @@ struct ChatView: View {
                         MessageRow(
                             message: message,
                             onOpen: { previewURL = $0 },
-                            onRetry: retryAction(for: message)
+                            onRetry: retryAction(for: message),
+                            onRegenerate: regenerateAction(for: message)
                         )
                         .id(message.id)
+                    }
+                    if let streaming = vm.streamingText, !streaming.isEmpty {
+                        StreamingBubble(text: streaming)
+                            .id("streaming")
                     }
                     if vm.isRunning {
                         ThinkingRow(status: vm.status, onStop: { vm.stop() })
@@ -100,8 +128,24 @@ struct ChatView: View {
             .onChange(of: vm.isRunning) { _, _ in
                 withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            .onChange(of: vm.streamingText?.count ?? 0) { _, _ in
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
+    }
+
+    private var showsVoiceButton: Bool {
+        onStartVoice != nil && !vm.isRunning && vm.pendingAttachments.isEmpty
+            && vm.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func regenerateAction(for message: ChatMessage) -> (() -> Void)? {
+        guard message.role == .assistant, !message.isLocalNotice, vm.canRegenerate,
+              message.id == vm.conversation.messages.last(where: { $0.role == .assistant && !$0.isLocalNotice })?.id
+        else { return nil }
+        let model = vm
+        return { model.regenerate() }
     }
 
     private func retryAction(for message: ChatMessage) -> (() -> Void)? {
@@ -129,6 +173,39 @@ struct ChatView: View {
                 .font(.subheadline)
                 .foregroundColor(Theme.secondaryText)
                 .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button {
+                    if let onStartVoice { onStartVoice() } else { vm.toggleListening() }
+                } label: {
+                    Label("Talk to JARVIS", systemImage: "waveform")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .foregroundColor(Theme.background)
+                .disabled(!settings.isProviderConfigured)
+                Menu {
+                    ForEach(AssistantMode.allCases) { mode in
+                        Button {
+                            vm.newConversation(mode: mode)
+                        } label: {
+                            Label(mode.title, systemImage: mode.icon)
+                        }
+                    }
+                } label: {
+                    Label(vm.currentMode.title, systemImage: vm.currentMode.icon)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .hudPanel(cornerRadius: 20)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 10)], spacing: 10) {
                 ForEach(ChatViewModel.quickPrompts) { prompt in
                     Button {
@@ -203,6 +280,20 @@ struct ChatView: View {
                     PhotosPicker(selection: $photoItems, maxSelectionCount: 4, matching: .images) {
                         Label("Photos", systemImage: "photo.on.rectangle")
                     }
+                    #if os(iOS)
+                    Button {
+                        vm.showCamera = true
+                    } label: {
+                        Label("Take photo", systemImage: "camera")
+                    }
+                    if DocumentScannerView.isSupported {
+                        Button {
+                            vm.showScanner = true
+                        } label: {
+                            Label("Scan document", systemImage: "doc.viewfinder")
+                        }
+                    }
+                    #endif
                     Button {
                         showFileImporter = true
                     } label: {
@@ -250,12 +341,22 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
+                if let onStartVoice, showsVoiceButton {
+                    Button(action: onStartVoice) {
+                        Image(systemName: "waveform.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Voice mode")
+                }
+
                 if vm.isRunning {
                     Button { vm.stop() } label: {
                         Image(systemName: "stop.circle.fill").font(.system(size: 30)).foregroundColor(Theme.warm)
                     }
                     .buttonStyle(.plain)
-                } else {
+                } else if !showsVoiceButton {
                     Button { vm.send() } label: {
                         Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundColor(Theme.accent)
                     }

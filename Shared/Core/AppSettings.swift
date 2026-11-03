@@ -44,6 +44,14 @@ final class AppSettings: ObservableObject {
     @Published var speechRate: Double { didSet { defaults.set(speechRate, forKey: "speechRate") } }
     /// Empty = system language.
     @Published var recognitionLocale: String { didSet { defaults.set(recognitionLocale, forKey: "recognitionLocale") } }
+    /// "natural" = Gemini neural voice, "device" = on-device speech synthesis.
+    @Published var voiceEngine: String { didSet { defaults.set(voiceEngine, forKey: "voiceEngine") } }
+    /// Real-time Gemini Live conversation in voice mode.
+    @Published var liveVoiceEnabled: Bool { didSet { defaults.set(liveVoiceEnabled, forKey: "liveVoiceEnabled") } }
+    /// Empty = pick the newest Live model automatically.
+    @Published var geminiLiveModel: String { didSet { defaults.set(geminiLiveModel, forKey: "geminiLiveModel") } }
+    /// Listen for "Hey JARVIS" while the app is open.
+    @Published var wakeWordEnabled: Bool { didSet { defaults.set(wakeWordEnabled, forKey: "wakeWordEnabled") } }
 
     // MARK: Agent behaviour
 
@@ -51,6 +59,8 @@ final class AppSettings: ObservableObject {
     /// macOS: run shell/AppleScript actions without asking first.
     @Published var autoApproveActions: Bool { didSet { defaults.set(autoApproveActions, forKey: "autoApproveActions") } }
     @Published var hapticsEnabled: Bool { didSet { defaults.set(hapticsEnabled, forKey: "hapticsEnabled") } }
+    @Published var memoryEnabled: Bool { didSet { defaults.set(memoryEnabled, forKey: "memoryEnabled") } }
+    @Published var streamResponses: Bool { didSet { defaults.set(streamResponses, forKey: "streamResponses") } }
 
     // MARK: iOS
 
@@ -88,6 +98,12 @@ final class AppSettings: ObservableObject {
         voiceIdentifier = d.string(forKey: "voiceIdentifier") ?? ""
         speechRate = d.object(forKey: "speechRate") as? Double ?? 0.5
         recognitionLocale = d.string(forKey: "recognitionLocale") ?? ""
+        voiceEngine = d.string(forKey: "voiceEngine") ?? "natural"
+        liveVoiceEnabled = d.object(forKey: "liveVoiceEnabled") as? Bool ?? true
+        geminiLiveModel = d.string(forKey: "geminiLiveModel") ?? ""
+        wakeWordEnabled = d.object(forKey: "wakeWordEnabled") as? Bool ?? false
+        memoryEnabled = d.object(forKey: "memoryEnabled") as? Bool ?? true
+        streamResponses = d.object(forKey: "streamResponses") as? Bool ?? true
         maxAgentSteps = d.object(forKey: "maxAgentSteps") as? Int ?? 15
         autoApproveActions = d.object(forKey: "autoApproveActions") as? Bool ?? false
         hapticsEnabled = d.object(forKey: "hapticsEnabled") as? Bool ?? true

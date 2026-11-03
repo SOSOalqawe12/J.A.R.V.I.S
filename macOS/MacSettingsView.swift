@@ -15,6 +15,7 @@ struct MacSettingsView: View {
             Form {
                 VoiceSettingsSection()
                 PersonalizationSection()
+                MemorySettingsSection()
             }
             .formStyle(.grouped)
             .tabItem { Label("Voice & You", systemImage: "waveform") }

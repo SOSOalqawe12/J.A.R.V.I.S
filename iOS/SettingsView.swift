@@ -22,6 +22,7 @@ struct SettingsView: View {
             AIProviderSettingsSections()
             VoiceSettingsSection()
             PersonalizationSection()
+            MemorySettingsSection()
 
             Section {
                 Toggle("Require Face ID", isOn: $settings.appLockEnabled)
@@ -48,8 +49,14 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Say \"Ask JARVIS\" to Siri, or use the Ask JARVIS action in Shortcuts. Other apps can open jarvis://ask?q=your+request.")
-                    .font(.footnote)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Try saying to Siri:").font(.footnote.weight(.semibold))
+                    Text("• “Talk to JARVIS” – live voice\n• “Ask JARVIS” – any request\n• “JARVIS briefing”\n• “Generate an image with JARVIS”\n• “Add a note to JARVIS”\n• “Tell JARVIS to remember something”\n• “Scan a document with JARVIS”")
+                        .font(.footnote)
+                    Text("All actions are also in the Shortcuts app (incl. “Process File with JARVIS” for the share sheet). Assign “Talk to JARVIS” to the Action button. Links: jarvis://voice, jarvis://briefing, jarvis://ask?q=…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             } header: {
                 Text("Siri & Shortcuts")
             }
