@@ -20,8 +20,12 @@ You open the app, type or say a request, and JARVIS creates the file. Everything
 - Makes pictures with Gemini's image model
 - The folder shows up in the iOS Files app
 
-**Voice**
-- 🎙 **Live voice mode** (Gemini Live): a real-time spoken conversation. You can interrupt JARVIS mid-sentence, echo cancellation keeps it from hearing itself, and it can create files, add events and search while you talk. Transcripts are saved to your history.
+**Voice & video calls** (pick an engine from the menu at the top of the call screen)
+- 🎙 **Gemini Live**: a real-time spoken conversation. You can interrupt JARVIS mid-sentence, echo cancellation keeps it from hearing itself, and it can create files, add events and search while you talk. Transcripts are saved to your history.
+  - Calls reconnect seamlessly when Google rotates the connection (session resumption).
+  - Camera frames are sent at low resolution and only when the scene changes, so video calls last much longer and use far less quota.
+- ⚡️ **OpenAI Realtime** (`gpt-realtime`): the alternative when Gemini's free limits are too tight. Natural voices (Cedar, Marin…), tool use during the call, and the camera view is sent each time you start talking.
+- 💬 **Classic**: works with **every brain** (Claude, GPT, local models, on-device). It listens, thinks, and answers in a natural voice. With the camera on, a photo of what you're looking at goes with every sentence.
 - 📷 **Live vision**: turn on the camera during a call and ask "what am I looking at?"
 - 🗣 **Natural voice** for spoken replies (Gemini neural voices, e.g. Charon, Kore, Puck), with an automatic fallback to the best device voice
 - 👂 **"Hey JARVIS" wake word** while the app is open (on-device recognition when available)
@@ -66,7 +70,14 @@ You open the app, type or say a request, and JARVIS creates the file. Everything
 - 🗜 Zip folders, and move, copy, rename, edit or append to files
 - 🌐 Web search with sources, read web pages, download files
 
+**Limits & reliability**
+- Waits and retries automatically when a service says "slow down", using the delay the server suggests
+- Gemini drops to its **Lite** model (much higher free limits) when the main model is rate-limited
+- **Backup brain**: when one brain is out of quota, another takes over (e.g. a local Ollama model, which has no limits). Choose it under Settings › Limits
+- **Usage meter**: requests and tokens per brain, today and for the last 7 days
+
 **App**
+- 👋 First-run setup: pick a brain, paste a key, test it
 - ⚡️ **Streaming replies**: text appears as it's written
 - Message actions: copy, read aloud, share, regenerate
 - File browser with list and **gallery** views, Quick Look, share, rename, "Save to Photos" and "Ask JARVIS about this"
@@ -168,6 +179,11 @@ On an Apple Intelligence–capable iPhone or Mac running iOS/macOS 26 with Apple
 3. In JARVIS: **Settings › AI › Claude Code**, click **Check installation**, then choose **Claude Code** as the brain.
 
 JARVIS runs the official `claude` CLI in your JARVIS folder, so requests use your subscription. Screenshots are passed to it as image files.
+
+### If calls or limits are a problem
+- **Video calls cut out**: update to this version. Gemini Live calls now resume automatically and the camera uses about 8× fewer tokens. If your key's live quota is used up, switch the call to **OpenAI Realtime** or **Classic** from the menu at the top of the call screen.
+- **"Rate-limited" or "quota" errors**: set a **backup brain** under Settings › Limits. A local model via Ollama has no limits. A paid Gemini or OpenAI key raises limits a lot.
+- Settings › Usage shows how many requests each brain used today. Each tool step counts as a request.
 
 ### iPhone permissions
 JARVIS asks for permission the first time it needs each one: microphone and speech, camera, Photos (to save images), Calendars, Reminders, Contacts, Media library (music), Location (weather), Local Network (local model servers) and Notifications (timers). Live voice keeps running if you lock the screen during a call.

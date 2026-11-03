@@ -94,6 +94,19 @@ struct AIProviderSettingsSections: View {
             }
 
             Section {
+                Picker("When rate-limited, switch to", selection: $settings.fallbackProvider) {
+                    Text("Don't switch").tag("")
+                    ForEach(ProviderKind.available.filter { $0 != settings.provider }) { kind in
+                        Text(kind.shortName + (settings.isConfigured(kind) ? "" : " (not set up)")).tag(kind.rawValue)
+                    }
+                }
+            } header: {
+                Text("Limits")
+            } footer: {
+                Text("Free tiers have tight limits. JARVIS waits and retries when asked, Gemini drops to its higher-limit Lite model, and then this backup brain takes over (e.g. a local Ollama model is unlimited).")
+            }
+
+            Section {
                 Toggle("Stream replies as they're written", isOn: $settings.streamResponses)
                 Button {
                     Task { await testConnection() }
@@ -334,7 +347,17 @@ struct VoiceSettingsSection: View {
                 Text("Device voice").tag("device")
             }
             #if os(iOS)
-            Toggle("Real-time Live voice mode", isOn: $settings.liveVoiceEnabled)
+            Picker("Voice & video calls", selection: $settings.liveEngine) {
+                Text("Automatic").tag("auto")
+                ForEach(LiveEngineKind.allCases) { Text($0.title).tag($0.rawValue) }
+            }
+            if settings.hasOpenAIKey {
+                TextField("OpenAI Realtime model", text: $settings.openAIRealtimeModel)
+                    .autocorrectionDisabled()
+                Picker("OpenAI Realtime voice", selection: $settings.openAIRealtimeVoice) {
+                    ForEach(OpenAIRealtimeTransport.voices, id: \.self) { Text($0.capitalized).tag($0) }
+                }
+            }
             #endif
             Toggle("Listen for “Hey JARVIS” while open", isOn: $settings.wakeWordEnabled)
             Picker("Device voice", selection: $settings.voiceIdentifier) {
@@ -360,7 +383,7 @@ struct VoiceSettingsSection: View {
         } header: {
             Text("Voice")
         } footer: {
-            Text("Natural voice uses Gemini's neural speech (needs a Gemini key). Live voice mode streams audio both ways in real time – interrupt any time, show things with the camera. Hands-free: JARVIS listens again after answering. The wake word works only while JARVIS is open and uses on-device recognition when available.")
+            Text("Natural voice uses Gemini (or OpenAI) neural speech. Calls: Gemini Live and OpenAI Realtime stream audio both ways – interrupt any time, show things with the camera; Classic works with every brain and attaches the camera view each time you speak. Automatic = Gemini Live, else OpenAI Realtime, else Classic. The wake word works while JARVIS is open.")
         }
     }
 }
@@ -423,5 +446,34 @@ struct MemorySettingsSection: View {
         } footer: {
             Text("JARVIS remembers preferences and facts you share (\"remember that I'm vegetarian\"). Stored only on this device; used in new conversations.")
         }
+    }
+}
+
+/// Requests and tokens per brain.
+struct UsageSection: View {
+    @ObservedObject private var usage = UsageTracker.shared
+
+    var body: some View {
+        Section {
+            if usage.today.isEmpty {
+                Text("No requests yet today.").foregroundColor(.secondary)
+            }
+            ForEach(Array(usage.today.enumerated()), id: \.offset) { _, item in
+                LabeledContent(item.provider.shortName,
+                               value: "\(item.entry.requests) requests · \(UsageSection.format(item.entry.tokens)) tokens")
+            }
+            let week = usage.total(lastDays: 7)
+            LabeledContent("Last 7 days", value: "\(week.requests) requests · \(UsageSection.format(week.tokens)) tokens")
+            Button("Reset", role: .destructive) { usage.reset() }
+        } header: {
+            Text("Usage today")
+        } footer: {
+            Text("Each tool step is one request, so agent tasks use several. Counts are kept on this device only.")
+        }
+    }
+
+    static func format(_ tokens: Int) -> String {
+        tokens >= 1_000_000 ? String(format: "%.1fM", Double(tokens) / 1_000_000)
+            : tokens >= 1_000 ? String(format: "%.1fk", Double(tokens) / 1_000) : "\(tokens)"
     }
 }

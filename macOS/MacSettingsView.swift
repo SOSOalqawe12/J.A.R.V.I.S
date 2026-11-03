@@ -25,7 +25,10 @@ struct MacSettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Screen & Control", systemImage: "eye") }
-            Form { PermissionsSection() }
+            Form {
+                PermissionsSection()
+                UsageSection()
+            }
                 .formStyle(.grouped)
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
         }

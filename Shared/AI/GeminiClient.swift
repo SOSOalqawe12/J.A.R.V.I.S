@@ -318,6 +318,8 @@ actor GeminiModelCatalog {
 struct GeminiProvider: LLMProvider {
     let client: GeminiClient
     let model: String
+    /// Cheaper model with higher limits, tried automatically when `model` is rate-limited.
+    var fallbackModel: String? = nil
 
     var kind: ProviderKind { .gemini }
     var modelName: String { model }
@@ -336,16 +338,30 @@ struct GeminiProvider: LLMProvider {
     }
 
     func complete(_ request: LLMRequest) async throws -> LLMReply {
-        let json = try await client.generateContent(model: model, body: makeBody(request))
-        return try GeminiProvider.parseReply(json, model: model)
+        do {
+            let json = try await client.generateContent(model: model, body: makeBody(request))
+            return try GeminiProvider.parseReply(json, model: model)
+        } catch let error as LLMError where error.isRateLimit {
+            guard let fallbackModel, fallbackModel != model else { throw error }
+            var reply = try await GeminiProvider(client: client, model: fallbackModel).complete(request)
+            reply.notice = "\(model) is rate-limited, so \(fallbackModel) answered."
+            return reply
+        }
     }
 
     func completeStreaming(_ request: LLMRequest, onPartial: @escaping (String) -> Void) async throws -> LLMReply {
-        var accumulator = GeminiStreamAccumulator()
-        try await client.streamGenerateContent(model: model, body: makeBody(request)) { chunk in
-            if accumulator.add(chunk) { onPartial(accumulator.visibleText) }
+        do {
+            var accumulator = GeminiStreamAccumulator()
+            try await client.streamGenerateContent(model: model, body: makeBody(request)) { chunk in
+                if accumulator.add(chunk) { onPartial(accumulator.visibleText) }
+            }
+            return try GeminiProvider.parseReply(accumulator.response(model: model), model: model)
+        } catch let error as LLMError where error.isRateLimit {
+            guard let fallbackModel, fallbackModel != model else { throw error }
+            var reply = try await GeminiProvider(client: client, model: fallbackModel).completeStreaming(request, onPartial: onPartial)
+            reply.notice = "\(model) is rate-limited, so \(fallbackModel) answered."
+            return reply
         }
-        return try GeminiProvider.parseReply(accumulator.response(model: model), model: model)
     }
 
     static func declaration(_ tool: ToolSpec) -> JSONValue {
@@ -484,7 +500,8 @@ struct GeminiProvider: LLMProvider {
             raw: .array(rawParts),
             model: json["modelVersion"]?.stringValue ?? model,
             stopReason: finish,
-            notice: finish == "MAX_TOKENS" ? "The reply was cut off because it hit the length limit." : nil
+            notice: finish == "MAX_TOKENS" ? "The reply was cut off because it hit the length limit." : nil,
+            tokens: json["usageMetadata"]?["totalTokenCount"]?.intValue
         )
     }
 }
@@ -498,6 +515,7 @@ struct GeminiStreamAccumulator {
     private(set) var finishReason: String?
     private(set) var modelVersion: String?
     private(set) var blockReason: String?
+    private(set) var usage: JSONValue?
 
     var visibleText: String {
         parts.filter { $0["thought"]?.boolValue != true && $0["functionCall"] == nil }
@@ -514,6 +532,7 @@ struct GeminiStreamAccumulator {
     mutating func add(_ chunk: JSONValue) -> Bool {
         if let version = chunk["modelVersion"]?.stringValue { modelVersion = version }
         if let reason = chunk["promptFeedback"]?["blockReason"]?.stringValue { blockReason = reason }
+        if let metadata = chunk["usageMetadata"] { usage = metadata }
         guard let candidate = chunk["candidates"]?[0] else { return false }
         if let finish = candidate["finishReason"]?.stringValue { finishReason = finish }
         var changed = false
@@ -543,6 +562,7 @@ struct GeminiStreamAccumulator {
             root["candidates"] = [.object(candidate)]
         }
         if let blockReason { root["promptFeedback"] = ["blockReason": .string(blockReason)] }
+        if let usage { root["usageMetadata"] = usage }
         return .object(root)
     }
 }

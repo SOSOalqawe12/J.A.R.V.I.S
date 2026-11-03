@@ -31,6 +31,8 @@ final class ChatViewModel: ObservableObject {
     var screenCapturer: (@MainActor () async throws -> Attachment)?
     /// Extra per-turn context, e.g. the frontmost Mac app.
     var contextProvider: (@MainActor () -> String?)?
+    /// Voice mode with the camera on: the current view is attached to each spoken turn.
+    var cameraSnapshot: (@MainActor () -> Attachment?)?
 
     private var runTask: Task<Void, Never>?
 
@@ -46,6 +48,13 @@ final class ChatViewModel: ObservableObject {
         }
         VoiceOutput.shared.onFinish = { [weak self] in
             self?.voiceReplyFinished()
+        }
+        NotificationCenter.default.addObserver(forName: .jarvisStatus, object: nil, queue: .main) { [weak self] note in
+            let text = note.userInfo?["text"] as? String ?? ""
+            Task { @MainActor in
+                guard let self, self.isRunning else { return }
+                self.status = text
+            }
         }
     }
 
@@ -190,6 +199,11 @@ final class ChatViewModel: ObservableObject {
         var parts: [MessagePart] = [.text(SystemPrompts.turnContext(extra: contextProvider?()), hidden: true)]
         if !text.isEmpty { parts.append(.text(text)) }
         parts.append(contentsOf: attachments.map { .attachment($0) })
+
+        if voiceLoopActive, let snapshot = cameraSnapshot?() {
+            parts.append(.attachment(snapshot))
+            parts.append(.text("(The attached photo is what my camera sees right now.)", hidden: true))
+        }
 
         if wantsScreen, let capturer = screenCapturer {
             status = "Looking at your screen…"

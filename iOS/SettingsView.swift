@@ -23,6 +23,7 @@ struct SettingsView: View {
             VoiceSettingsSection()
             PersonalizationSection()
             MemorySettingsSection()
+            UsageSection()
 
             Section {
                 Toggle("Require Face ID", isOn: $settings.appLockEnabled)

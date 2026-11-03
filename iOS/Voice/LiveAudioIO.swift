@@ -8,7 +8,7 @@ final class LiveAudioIO: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var converter: AVAudioConverter?
-    private let micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
+    private var micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
     private let speakerFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)!
     private let lock = NSLock()
     private var pendingBuffers = 0
@@ -16,7 +16,7 @@ final class LiveAudioIO: @unchecked Sendable {
     private var chunk = Data()
     private var running = false
 
-    /// 100 ms chunks of 16-bit little-endian mono PCM at 16 kHz.
+    /// 100 ms chunks of 16-bit little-endian mono PCM at the requested rate.
     var onMicrophoneChunk: ((Data) -> Void)?
     var onInputLevel: ((Float) -> Void)?
     var onOutputLevel: ((Float) -> Void)?
@@ -34,7 +34,12 @@ final class LiveAudioIO: @unchecked Sendable {
         return pendingBuffers > 0
     }
 
-    func start() throws {
+    var isRunning: Bool { running }
+
+    func start(micSampleRate: Double = 16_000) throws {
+        if let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: micSampleRate, channels: 1, interleaved: true) {
+            micFormat = format
+        }
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -88,7 +93,7 @@ final class LiveAudioIO: @unchecked Sendable {
         }
         guard error == nil, output.frameLength > 0, let samples = output.int16ChannelData?[0] else { return }
         chunk.append(Data(bytes: samples, count: Int(output.frameLength) * 2))
-        if chunk.count >= 3_200 {
+        if chunk.count >= Int(micFormat.sampleRate * 0.1) * 2 {
             let ready = chunk
             chunk.removeAll(keepingCapacity: true)
             onMicrophoneChunk?(ready)

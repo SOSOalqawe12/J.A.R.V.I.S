@@ -63,6 +63,13 @@ final class AppSettings: ObservableObject {
     @Published var liveVoiceEnabled: Bool { didSet { defaults.set(liveVoiceEnabled, forKey: "liveVoiceEnabled") } }
     /// Empty = pick the newest Live model automatically.
     @Published var geminiLiveModel: String { didSet { defaults.set(geminiLiveModel, forKey: "geminiLiveModel") } }
+    /// auto / gemini / openai / classic
+    @Published var liveEngine: String { didSet { defaults.set(liveEngine, forKey: "liveEngine") } }
+    @Published var openAIRealtimeModel: String { didSet { defaults.set(openAIRealtimeModel, forKey: "openAIRealtimeModel") } }
+    @Published var openAIRealtimeVoice: String { didSet { defaults.set(openAIRealtimeVoice, forKey: "openAIRealtimeVoice") } }
+    /// Brain to switch to when the main one is rate-limited ("" = none).
+    @Published var fallbackProvider: String { didSet { defaults.set(fallbackProvider, forKey: "fallbackProvider") } }
+    @Published var onboardingDone: Bool { didSet { defaults.set(onboardingDone, forKey: "onboardingDone") } }
     /// Listen for "Hey JARVIS" while the app is open.
     @Published var wakeWordEnabled: Bool { didSet { defaults.set(wakeWordEnabled, forKey: "wakeWordEnabled") } }
 
@@ -123,6 +130,11 @@ final class AppSettings: ObservableObject {
         liveVoiceEnabled = d.object(forKey: "liveVoiceEnabled") as? Bool ?? true
         geminiLiveModel = d.string(forKey: "geminiLiveModel") ?? ""
         wakeWordEnabled = d.object(forKey: "wakeWordEnabled") as? Bool ?? false
+        liveEngine = d.string(forKey: "liveEngine") ?? "auto"
+        openAIRealtimeModel = d.string(forKey: "openAIRealtimeModel") ?? "gpt-realtime"
+        openAIRealtimeVoice = d.string(forKey: "openAIRealtimeVoice") ?? "cedar"
+        fallbackProvider = d.string(forKey: "fallbackProvider") ?? ""
+        onboardingDone = d.object(forKey: "onboardingDone") as? Bool ?? false
         memoryEnabled = d.object(forKey: "memoryEnabled") as? Bool ?? true
         streamResponses = d.object(forKey: "streamResponses") as? Bool ?? true
         maxAgentSteps = d.object(forKey: "maxAgentSteps") as? Int ?? 15
@@ -142,8 +154,10 @@ final class AppSettings: ObservableObject {
     var hasOpenAIKey: Bool { !openAIAPIKey.isEmpty }
 
     /// True when the selected provider has what it needs to run.
-    var isProviderConfigured: Bool {
-        switch provider {
+    var isProviderConfigured: Bool { isConfigured(provider) }
+
+    func isConfigured(_ kind: ProviderKind) -> Bool {
+        switch kind {
         case .gemini: return hasGeminiKey
         case .claude: return hasClaudeKey
         case .claudeCode: return true

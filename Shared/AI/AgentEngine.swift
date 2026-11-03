@@ -17,11 +17,26 @@ final class AgentEngine {
     }
 
     static func makeProvider(settings: AppSettings) async throws -> LLMProvider {
-        switch settings.provider {
+        try await makeProvider(kind: settings.provider, settings: settings)
+    }
+
+    /// The backup brain to use when `current` is rate-limited (if configured).
+    static func fallbackProvider(for current: ProviderKind, settings: AppSettings) async -> LLMProvider? {
+        guard let kind = ProviderKind(rawValue: settings.fallbackProvider), kind != current, settings.isConfigured(kind) else { return nil }
+        return try? await makeProvider(kind: kind, settings: settings)
+    }
+
+    static func makeProvider(kind: ProviderKind, settings: AppSettings) async throws -> LLMProvider {
+        switch kind {
         case .gemini:
             guard settings.hasGeminiKey else { throw LLMError.missingAPIKey(.gemini) }
             let model = await GeminiModelCatalog.shared.resolve(.chat, preferred: settings.geminiChatModel, apiKey: settings.geminiAPIKey)
-            return GeminiProvider(client: GeminiClient(apiKey: settings.geminiAPIKey), model: model)
+            // Lite models have much higher free-tier limits: used automatically when the main one is rate-limited.
+            let models = await GeminiModelCatalog.shared.models(apiKey: settings.geminiAPIKey)
+            let lite = GeminiModelPicker.candidates(models, for: .chat)
+                .filter { $0.id.contains("lite") }
+                .max { GeminiModelPicker.score($0.id, role: .chat) < GeminiModelPicker.score($1.id, role: .chat) }?.id
+            return GeminiProvider(client: GeminiClient(apiKey: settings.geminiAPIKey), model: model, fallbackModel: lite == model ? nil : lite)
         case .claude:
             guard settings.hasClaudeKey else { throw LLMError.missingAPIKey(.claude) }
             let model = settings.claudeModel.isEmpty ? ClaudeClient.defaultModel : settings.claudeModel
@@ -76,20 +91,29 @@ final class AgentEngine {
     ) async throws -> String? {
         var history = history
         var session = sessionID
-        let specs = provider.kind == .claudeCode ? [] : tools.map(\.spec)
+        var provider = provider
+        var switchedProvider = false
 
         for step in 0..<max(1, maxSteps) {
             try Task.checkCancellation()
             onStatus(step == 0 ? "Thinking…" : "Reviewing results…")
+            let specs = provider.kind == .claudeCode ? [] : tools.map(\.spec)
             let request = LLMRequest(system: system, messages: history, tools: specs, sessionID: session)
             let reply: LLMReply
-            if stream {
-                reply = try await provider.completeStreaming(request) { @Sendable text in
-                    Task { @MainActor in onPartial(text) }
-                }
-            } else {
-                reply = try await provider.complete(request)
+            do {
+                reply = try await AgentEngine.call(provider, request, stream: stream, onPartial: onPartial)
+            } catch let error as LLMError where error.isRateLimit && !switchedProvider {
+                // Main brain is rate-limited: hand over to the backup brain.
+                guard let backup = await AgentEngine.fallbackProvider(for: provider.kind, settings: context.settings) else { throw error }
+                onMessage(.notice("\(provider.kind.shortName) is rate-limited – \(backup.kind.shortName) is taking over."))
+                onStatus("Switching to \(backup.kind.shortName)…")
+                provider = backup
+                switchedProvider = true
+                let backupSpecs = provider.kind == .claudeCode ? [] : tools.map(\.spec)
+                reply = try await AgentEngine.call(provider, LLMRequest(system: system, messages: history, tools: backupSpecs, sessionID: nil),
+                                                   stream: stream, onPartial: onPartial)
             }
+            UsageTracker.shared.record(provider.kind, tokens: reply.tokens)
             try Task.checkCancellation()
             if let newSession = reply.sessionID { session = newSession }
 
@@ -123,6 +147,16 @@ final class AgentEngine {
         }
         onMessage(.notice("I paused after \(maxSteps) steps. Say \"continue\" and I'll keep going."))
         return session
+    }
+
+    private static func call(_ provider: LLMProvider, _ request: LLMRequest, stream: Bool,
+                             onPartial: @escaping @MainActor (String) -> Void) async throws -> LLMReply {
+        if stream {
+            return try await provider.completeStreaming(request) { @Sendable text in
+                Task { @MainActor in onPartial(text) }
+            }
+        }
+        return try await provider.complete(request)
     }
 
     private func execute(_ call: ToolCall) async -> ToolResult {

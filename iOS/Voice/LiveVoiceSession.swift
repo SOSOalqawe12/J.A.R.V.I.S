@@ -3,10 +3,10 @@ import AVFoundation
 import CoreImage
 import SwiftUI
 
-/// A real-time, interruptible voice conversation over the Gemini Live API.
-/// JARVIS hears you continuously, answers with a natural voice, can be
-/// interrupted mid-sentence, uses all its tools while talking, and can see
-/// through the camera.
+/// A real-time, interruptible voice (and video) conversation over Gemini Live
+/// or OpenAI Realtime. JARVIS hears you continuously, answers with a natural
+/// voice, can be interrupted, uses all its tools while talking, sees through
+/// the camera, and reconnects transparently when the server rotates sessions.
 @MainActor
 final class LiveVoiceSession: ObservableObject {
     struct Line: Identifiable, Hashable {
@@ -16,7 +16,7 @@ final class LiveVoiceSession: ObservableObject {
     }
 
     enum Phase: Equatable {
-        case idle, connecting, listening, speaking, working(String), ended, failed(String)
+        case idle, connecting, reconnecting, listening, speaking, working(String), ended, failed(String)
     }
 
     @Published private(set) var phase: Phase = .idle
@@ -26,42 +26,55 @@ final class LiveVoiceSession: ObservableObject {
     @Published private(set) var createdFiles: [String] = []
     @Published private(set) var cameraOn = false
     @Published private(set) var modelName = ""
+    @Published private(set) var engine: LiveEngineKind = .gemini
+    @Published private(set) var notice: String?
     @Published var micMuted = false {
         didSet { audio.muted = micMuted }
     }
 
     let camera = CameraFrameSource()
     private let audio = LiveAudioIO()
+    private var transport: LiveTransport?
     private var socket: URLSessionWebSocketTask?
-    private var receiveTask: Task<Void, Never>?
+    private var connectionID = 0
+    private var ready = false
+    private var everReady = false
+    private var resumeHandle: String?
+    private var reconnectAttempts = 0
+    private var minimalSetup = false
+    private var userEnded = false
     private var tools: [String: AgentTool] = [:]
+    private var toolSpecs: [ToolSpec] = []
+    private var systemPrompt = ""
+    private var initialText: String?
     private var openUserLine: Int?
     private var openModelLine: Int?
-    private var initialText: String?
     private let settings = AppSettings.shared
-
-    static let endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 
     var isActive: Bool {
         switch phase {
-        case .connecting, .listening, .speaking, .working: return true
+        case .connecting, .reconnecting, .listening, .speaking, .working: return true
         default: return false
         }
     }
 
     // MARK: Lifecycle
 
-    func start(initialText: String? = nil) async {
-        guard !isActive else { return }
-        guard settings.hasGeminiKey else {
-            phase = .failed("Live voice needs a Gemini API key.")
-            return
-        }
+    func start(engine: LiveEngineKind, initialText: String? = nil) async {
+        guard !isActive, engine != .classic else { return }
+        self.engine = engine
         phase = .connecting
         lines = []
         createdFiles = []
+        notice = nil
         openUserLine = nil
         openModelLine = nil
+        ready = false
+        everReady = false
+        resumeHandle = nil
+        reconnectAttempts = 0
+        minimalSetup = false
+        userEnded = false
         self.initialText = initialText
 
         guard await AVAudioApplication.requestRecordPermission() else {
@@ -69,135 +82,88 @@ final class LiveVoiceSession: ObservableObject {
             return
         }
 
-        let key = settings.geminiAPIKey
-        let model: String
-        if settings.geminiLiveModel.isEmpty {
-            let models = await GeminiModelCatalog.shared.models(apiKey: key)
-            model = GeminiModelPicker.best(models, for: .live) ?? GeminiModelPicker.fallbackLive
-        } else {
-            model = settings.geminiLiveModel
+        switch engine {
+        case .gemini:
+            guard settings.hasGeminiKey else { phase = .failed("Gemini Live needs a Gemini API key."); return }
+            let model: String
+            if settings.geminiLiveModel.isEmpty {
+                let models = await GeminiModelCatalog.shared.models(apiKey: settings.geminiAPIKey)
+                model = GeminiModelPicker.best(models, for: .live) ?? GeminiModelPicker.fallbackLive
+            } else {
+                model = settings.geminiLiveModel
+            }
+            modelName = model
+            transport = GeminiLiveTransport(apiKey: settings.geminiAPIKey, model: model, voice: settings.geminiVoiceName)
+        case .openai:
+            guard settings.hasOpenAIKey else { phase = .failed("OpenAI Realtime needs an OpenAI API key."); return }
+            modelName = settings.openAIRealtimeModel
+            transport = OpenAIRealtimeTransport(apiKey: settings.openAIAPIKey, model: settings.openAIRealtimeModel, voice: settings.openAIRealtimeVoice)
+        case .classic:
+            return
         }
-        modelName = model
 
         let allTools = Toolbox.sharedTools() + iOSTools.all
         tools = allTools.reduce(into: [:]) { $0[$1.name] = $1 }
-
-        var components = URLComponents(string: LiveVoiceSession.endpoint)!
-        components.queryItems = [URLQueryItem(name: "key", value: key)]
-        guard let url = components.url else { phase = .failed("Bad Live API URL."); return }
-        let socket = URLSession.shared.webSocketTask(with: url)
-        socket.maximumMessageSize = 32 * 1024 * 1024
-        self.socket = socket
-        socket.resume()
-
-        do {
-            try await send(setupMessage(model: model, tools: allTools))
-        } catch {
-            fail("Couldn't connect: \(error.localizedDescription)")
-            return
-        }
-        receiveTask = Task { [weak self] in await self?.receiveLoop() }
-    }
-
-    func stop() {
-        guard phase != .ended else { return }
-        receiveTask?.cancel()
-        receiveTask = nil
-        socket?.cancel(with: .normalClosure, reason: nil)
-        socket = nil
-        audio.stop()
-        if cameraOn { toggleCamera() }
-        let wasActive = isActive
-        phase = .ended
-        if wasActive { saveTranscript() }
-    }
-
-    private func fail(_ message: String) {
-        receiveTask?.cancel()
-        socket?.cancel(with: .goingAway, reason: nil)
-        socket = nil
-        audio.stop()
-        if cameraOn { toggleCamera() }
-        saveTranscript()
-        phase = .failed(message)
-    }
-
-    // MARK: Outgoing
-
-    private func setupMessage(model: String, tools: [AgentTool]) -> JSONValue {
-        let system = SystemPrompts.make(settings: settings) + """
+        toolSpecs = allTools.map(\.spec)
+        systemPrompt = SystemPrompts.make(settings: settings) + """
 
 
         # Live voice conversation
         You are speaking out loud in a real-time conversation. Keep replies short, warm and natural – usually one to \
         three sentences – unless the user asks for detail. Never read out markdown, code, file contents or long URLs. \
-        Before using a tool, say a few words about what you're doing ("One moment, creating that file"). \
-        If the camera is on you receive frames of what the user is looking at.
+        Before using a tool, say a few words about what you're doing. When the camera is on you receive images of what \
+        the user is looking at – describe or use them when relevant.
         """
-        let declarations = tools.map { GeminiProvider.declaration($0.spec) }
-        let setup: JSONValue = [
-            "model": .string("models/" + model),
-            "generationConfig": [
-                "responseModalities": ["AUDIO"],
-                "speechConfig": ["voiceConfig": ["prebuiltVoiceConfig": ["voiceName": .string(settings.geminiVoiceName)]]]
-            ],
-            "systemInstruction": ["parts": [["text": .string(system)]]],
-            "tools": [["functionDeclarations": .array(declarations)]],
-            "inputAudioTranscription": [:],
-            "outputAudioTranscription": [:],
-            "contextWindowCompression": ["slidingWindow": [:]]
-        ]
-        return ["setup": setup]
+        await connect()
     }
 
-    private func send(_ message: JSONValue) async throws {
-        guard let socket else { return }
-        try await socket.send(.string(message.jsonString()))
+    func stop() {
+        guard phase != .ended else { return }
+        userEnded = true
+        connectionID += 1
+        socket?.cancel(with: .normalClosure, reason: nil)
+        socket = nil
+        audio.stop()
+        if cameraOn { toggleCamera() }
+        let hadConversation = everReady
+        phase = .ended
+        if hadConversation { saveTranscript() }
     }
 
-    private func sendAudio(_ pcm: Data) {
-        guard isActive else { return }
-        let message: JSONValue = ["realtimeInput": ["audio": ["data": .string(pcm.base64EncodedString()), "mimeType": "audio/pcm;rate=16000"]]]
-        Task { try? await send(message) }
+    private func fail(_ message: String) {
+        connectionID += 1
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        audio.stop()
+        if everReady { saveTranscript() }
+        phase = .failed(message)
     }
 
-    private func sendFrame(_ jpeg: Data) {
-        guard isActive, cameraOn else { return }
-        let message: JSONValue = ["realtimeInput": ["video": ["data": .string(jpeg.base64EncodedString()), "mimeType": "image/jpeg"]]]
-        Task { try? await send(message) }
-    }
+    // MARK: Connection
 
-    func sendText(_ text: String) {
-        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty, isActive else { return }
-        lines.append(Line(isUser: true, text: clean))
-        openUserLine = nil
-        let message: JSONValue = ["clientContent": ["turns": [["role": "user", "parts": [["text": .string(clean)]]]], "turnComplete": true]]
-        Task { try? await send(message) }
-    }
-
-    func toggleCamera() {
-        if cameraOn {
-            camera.stop()
-            cameraOn = false
-        } else {
-            Task {
-                camera.onFrame = { @Sendable [weak self] jpeg in
-                    Task { @MainActor in self?.sendFrame(jpeg) }
-                }
-                if await camera.start() {
-                    cameraOn = true
-                }
+    private func connect() async {
+        guard let transport, !userEnded else { return }
+        connectionID += 1
+        let id = connectionID
+        ready = false
+        socket?.cancel(with: .goingAway, reason: nil)
+        do {
+            let socket = URLSession.shared.webSocketTask(with: try transport.connectRequest())
+            socket.maximumMessageSize = 32 * 1024 * 1024
+            self.socket = socket
+            socket.resume()
+            let messages = transport.setupMessages(system: systemPrompt, tools: toolSpecs, resumeHandle: resumeHandle, minimal: minimalSetup)
+            for message in messages {
+                try await socket.send(.string(message.jsonString()))
             }
+            Task { [weak self] in await self?.receiveLoop(socket: socket, id: id) }
+        } catch {
+            await connectionLost(error.localizedDescription, id: id)
         }
     }
 
-    func flipCamera() { camera.flip() }
-
-    // MARK: Incoming
-
-    private func receiveLoop() async {
-        while !Task.isCancelled, let socket {
+    private func receiveLoop(socket: URLSessionWebSocketTask, id: Int) async {
+        while id == connectionID {
             do {
                 let message = try await socket.receive()
                 let data: Data
@@ -206,50 +172,113 @@ final class LiveVoiceSession: ObservableObject {
                 case .data(let bytes): data = bytes
                 @unknown default: continue
                 }
-                guard let json = try? JSONValue.parse(data) else { continue }
-                await handle(json)
+                guard id == connectionID, let json = try? JSONValue.parse(data), let transport else { continue }
+                for event in transport.parse(json) {
+                    guard id == connectionID else { return }
+                    await handle(event)
+                }
             } catch {
-                guard !Task.isCancelled, phase != .ended else { return }
-                let reason = socket.closeReason.flatMap { String(data: $0, encoding: .utf8) }
-                fail(reason.map { "Live session closed: \($0)" } ?? "Live session ended: \(error.localizedDescription)")
+                guard id == connectionID else { return }
+                let reason = socket.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                await connectionLost(reason.isEmpty ? error.localizedDescription : reason, id: id)
                 return
             }
         }
     }
 
-    private func handle(_ json: JSONValue) async {
-        if json["setupComplete"] != nil {
-            beginAudio()
+    private func connectionLost(_ reason: String, id: Int) async {
+        guard id == connectionID, !userEnded, let transport else { return }
+        let lower = reason.lowercased()
+        // The server rejected an optional setup field: retry once with the bare minimum.
+        if !everReady, !minimalSetup, (lower.contains("invalid") || lower.contains("unknown") || lower.contains("field")) {
+            minimalSetup = true
+            await connect()
             return
         }
-        if let content = json["serverContent"] {
-            if content["interrupted"]?.boolValue == true {
-                audio.flushPlayback()
-                closeLines()
-                phase = .listening
+        // A working session dropped (time limit, network blip): reconnect.
+        if everReady, reconnectAttempts < 3, !LiveVoiceSession.isQuotaError(lower) {
+            reconnectAttempts += 1
+            phase = .reconnecting
+            if !transport.supportsResumption {
+                notice = "Reconnected – earlier context may be lost."
             }
-            if let text = content["inputTranscription"]?["text"]?.stringValue, !text.isEmpty {
-                appendUser(text)
-            }
-            if let text = content["outputTranscription"]?["text"]?.stringValue, !text.isEmpty {
-                appendModel(text)
-            }
-            for part in content["modelTurn"]?["parts"]?.arrayValue ?? [] {
-                if let inline = part["inlineData"], let b64 = inline["data"]?.stringValue, let pcm = Data(base64Encoded: b64) {
-                    audio.play(pcm16: pcm)
-                    if case .working = phase {} else { phase = .speaking }
-                }
-            }
-            if content["turnComplete"]?.boolValue == true {
-                closeLines()
-                if !audio.isPlaying { phase = .listening }
-            }
+            try? await Task.sleep(nanoseconds: UInt64(reconnectAttempts) * 600_000_000)
+            await connect()
+            return
         }
-        if let call = json["toolCall"] {
-            await runTools(call["functionCalls"]?.arrayValue ?? [])
+        fail(friendlyError(reason))
+    }
+
+    static func isQuotaError(_ lower: String) -> Bool {
+        lower.contains("quota") || lower.contains("resource_exhausted") || lower.contains("resource exhausted")
+            || lower.contains("rate limit") || lower.contains("billing") || lower.contains("exceeded")
+    }
+
+    private func friendlyError(_ reason: String) -> String {
+        let lower = reason.lowercased()
+        let other = engine == .gemini ? "OpenAI Realtime" : "Gemini Live"
+        if LiveVoiceSession.isQuotaError(lower) {
+            return "The \(engine.title) quota for your key is used up for now. Switch to \(other) or Classic mode with the menu at the top, or try again later."
         }
-        if json["goAway"] != nil {
-            lines.append(Line(isUser: false, text: "(The live session is about to end – start a new one to keep talking.)"))
+        if lower.contains("not found") || lower.contains("not supported") || lower.contains("does not exist") || lower.contains("model") {
+            return "The model \(modelName) isn't available for live voice with your key. Pick another one in Settings › Voice, or switch engine at the top. (\(reason.prefix(160)))"
+        }
+        if lower.contains("api key") || lower.contains("unauthorized") || lower.contains("permission") || lower.contains("401") || lower.contains("403") {
+            return "The API key was rejected for live voice. Check it in Settings. (\(reason.prefix(160)))"
+        }
+        return "The live session ended: \(reason.isEmpty ? "connection closed" : String(reason.prefix(200)))"
+    }
+
+    // MARK: Events
+
+    private func handle(_ event: LiveEvent) async {
+        switch event {
+        case .ready:
+            ready = true
+            everReady = true
+            reconnectAttempts = 0
+            if !audio.isRunning { beginAudio() }
+            if case .reconnecting = phase { notice = notice ?? "Reconnected." }
+            phase = .listening
+            if let text = initialText, !text.isEmpty {
+                initialText = nil
+                sendText(text)
+            }
+        case .audio(let pcm):
+            audio.play(pcm16: pcm)
+            if case .working = phase {} else { phase = .speaking }
+        case .userTranscript(let text):
+            appendUser(text)
+        case .modelTranscript(let text):
+            appendModel(text)
+        case .userStartedSpeaking:
+            // OpenAI: give the model a look at the scene whenever the user talks.
+            if let transport, !transport.streamsFramesContinuously, cameraOn, let jpeg = camera.latestJPEG {
+                send(transport.frameMessages(jpeg))
+            }
+        case .interrupted:
+            audio.flushPlayback()
+            closeLines()
+            if phase == .speaking { phase = .listening }
+        case .turnComplete:
+            closeLines()
+            if !audio.isPlaying, phase == .speaking { phase = .listening }
+        case .toolCalls(let calls):
+            await runTools(calls)
+        case .resumptionHandle(let handle):
+            resumeHandle = handle
+        case .goAway:
+            // The server will close soon; hop to a fresh connection now.
+            if transport?.supportsResumption == true, resumeHandle != nil {
+                phase = .reconnecting
+                await connect()
+            }
+        case .error(let message):
+            if ready {
+                notice = message
+            } else {
+                await connectionLost(message, id: connectionID)
+            }
         }
     }
 
@@ -271,48 +300,91 @@ final class LiveVoiceSession: ObservableObject {
             }
         }
         do {
-            try audio.start()
+            try audio.start(micSampleRate: transport?.micSampleRate ?? 16_000)
             audio.muted = micMuted
-            phase = .listening
             Haptics.success()
-            if let initialText, !initialText.isEmpty {
-                self.initialText = nil
-                sendText(initialText)
-            }
         } catch {
             fail("Audio couldn't start: \(error.localizedDescription)")
         }
     }
 
-    private func runTools(_ calls: [JSONValue]) async {
-        let context = ToolContext(workspace: .shared, settings: settings, approvals: ApprovalCenter.shared)
-        var responses: [JSONValue] = []
-        for call in calls {
-            let id = call["id"]?.stringValue ?? ""
-            let name = call["name"]?.stringValue ?? ""
-            let arguments = call["args"] ?? [:]
-            let tool = tools[name]
-            phase = .working(tool?.activityLabel ?? name)
-            var response: [String: JSONValue]
-            if let tool {
-                do {
-                    let output = try await tool.run(arguments, context: context)
-                    response = ["result": .string(output.text)]
-                    if !output.files.isEmpty {
-                        createdFiles.insert(contentsOf: output.files, at: 0)
-                        ChatViewModel.shared.noteCreatedFiles(output.files)
-                    }
-                } catch {
-                    response = ["error": .string(error.localizedDescription)]
-                }
-            } else {
-                response = ["error": .string("Unknown tool \(name)")]
+    // MARK: Outgoing
+
+    private func send(_ messages: [JSONValue]) {
+        guard let socket else { return }
+        Task {
+            for message in messages {
+                try? await socket.send(.string(message.jsonString()))
             }
-            var entry: [String: JSONValue] = ["name": .string(name), "response": .object(response)]
-            if !id.isEmpty { entry["id"] = .string(id) }
-            responses.append(.object(entry))
         }
-        try? await send(["toolResponse": ["functionResponses": .array(responses)]])
+    }
+
+    private func sendAudio(_ pcm: Data) {
+        guard ready, let transport else { return }
+        send([transport.audioMessage(pcm)])
+    }
+
+    private func sendFrame(_ jpeg: Data) {
+        guard ready, cameraOn, let transport, transport.streamsFramesContinuously else { return }
+        send(transport.frameMessages(jpeg))
+    }
+
+    func sendText(_ text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, ready, let transport else { return }
+        lines.append(Line(isUser: true, text: clean))
+        openUserLine = nil
+        if cameraOn, let jpeg = camera.latestJPEG, !transport.streamsFramesContinuously {
+            send(transport.frameMessages(jpeg))
+        }
+        send(transport.textMessages(clean))
+    }
+
+    func toggleCamera() {
+        if cameraOn {
+            camera.stop()
+            cameraOn = false
+            return
+        }
+        Task {
+            camera.onFrame = { @Sendable [weak self] jpeg in
+                Task { @MainActor in self?.sendFrame(jpeg) }
+            }
+            if await camera.start() {
+                cameraOn = true
+                notice = nil
+            } else {
+                notice = camera.lastError ?? "The camera couldn't start."
+            }
+        }
+    }
+
+    func flipCamera() { camera.flip() }
+
+    // MARK: Tools
+
+    private func runTools(_ calls: [LiveToolCall]) async {
+        let context = ToolContext(workspace: .shared, settings: settings, approvals: ApprovalCenter.shared)
+        var results: [LiveToolResult] = []
+        for call in calls {
+            let tool = tools[call.name]
+            phase = .working(tool?.activityLabel ?? call.name)
+            guard let tool else {
+                results.append(LiveToolResult(call: call, output: "Unknown tool \(call.name)", isError: true))
+                continue
+            }
+            do {
+                let output = try await tool.run(call.arguments, context: context)
+                if !output.files.isEmpty {
+                    createdFiles.insert(contentsOf: output.files, at: 0)
+                    ChatViewModel.shared.noteCreatedFiles(output.files)
+                }
+                results.append(LiveToolResult(call: call, output: output.text, isError: false))
+            } catch {
+                results.append(LiveToolResult(call: call, output: error.localizedDescription, isError: true))
+            }
+        }
+        if let transport { send(transport.toolResultMessages(results)) }
         phase = audio.isPlaying ? .speaking : .listening
     }
 
@@ -361,23 +433,46 @@ final class LiveVoiceSession: ObservableObject {
     }
 }
 
-/// Camera frames (≈1 per second, JPEG) for live vision.
+/// Camera frames for live vision: small JPEGs, sent only when the scene changes
+/// (at most one per second, at least one every five seconds).
 final class CameraFrameSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     let session = AVCaptureSession()
     var onFrame: ((Data) -> Void)?
+    private(set) var lastError: String?
 
     private let queue = DispatchQueue(label: "jarvis.camera")
     private let context = CIContext()
-    private var lastFrame = Date.distantPast
+    private let lock = NSLock()
+    private var lastSent = Date.distantPast
+    private var lastProcessed = Date.distantPast
+    private var lastFingerprint: [UInt8]?
     private var configured = false
     private var position: AVCaptureDevice.Position = .back
+    private var _latestJPEG: Data?
+
+    /// The most recent frame (for engines that take a snapshot per turn).
+    var latestJPEG: Data? {
+        lock.lock(); defer { lock.unlock() }
+        return _latestJPEG
+    }
+
+    var latestAttachment: Attachment? {
+        latestJPEG.map { Attachment(name: "Camera.jpg", mimeType: "image/jpeg", data: $0) }
+    }
 
     func start() async -> Bool {
-        guard await AVCaptureDevice.requestAccess(for: .video) else { return false }
+        guard await AVCaptureDevice.requestAccess(for: .video) else {
+            lastError = "Camera access is off. Enable it in Settings › JARVIS › Camera."
+            return false
+        }
         return await withCheckedContinuation { continuation in
             queue.async {
                 let ok = self.configure()
-                if ok { self.session.startRunning() }
+                if ok {
+                    self.session.startRunning()
+                } else {
+                    self.lastError = "No camera is available."
+                }
                 continuation.resume(returning: ok)
             }
         }
@@ -400,7 +495,7 @@ final class CameraFrameSource: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         session.automaticallyConfiguresApplicationAudioSession = false
-        session.sessionPreset = .high
+        if session.canSetSessionPreset(.vga640x480) { session.sessionPreset = .vga640x480 }
         session.inputs.forEach { session.removeInput($0) }
         session.outputs.forEach { session.removeOutput($0) }
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
@@ -417,13 +512,21 @@ final class CameraFrameSource: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let now = Date()
-        guard now.timeIntervalSince(lastFrame) >= 1, let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        lastFrame = now
+        guard now.timeIntervalSince(lastProcessed) >= 0.5, let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        lastProcessed = now
         var image = CIImage(cvPixelBuffer: pixels).oriented(position == .front ? .leftMirrored : .right)
-        let scale = 768 / max(image.extent.width, image.extent.height)
+        let scale = 512 / max(image.extent.width, image.extent.height)
         if scale < 1 { image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
         guard let cgImage = context.createCGImage(image, from: image.extent),
               let jpeg = ImageCoder.encode(cgImage, type: .jpeg, quality: 0.6) else { return }
+        lock.lock(); _latestJPEG = jpeg; lock.unlock()
+
+        let fingerprint = ImageCoder.fingerprint(cgImage, size: 16)
+        let changed = lastFingerprint.map { ImageCoder.difference($0, fingerprint) > 7 } ?? true
+        let elapsed = now.timeIntervalSince(lastSent)
+        guard elapsed >= 1, changed || elapsed >= 5 else { return }
+        lastSent = now
+        lastFingerprint = fingerprint
         onFrame?(jpeg)
     }
 }

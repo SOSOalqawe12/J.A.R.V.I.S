@@ -52,6 +52,7 @@ struct RootView: View {
     @State private var showHistory = false
     @State private var filesPath: [URL] = []
     @State private var voice: VoicePresentation?
+    @State private var showOnboarding = false
 
     var body: some View {
         ZStack {
@@ -97,6 +98,9 @@ struct RootView: View {
             .fullScreenCover(item: $voice) { presentation in
                 VoiceModeView(initialText: presentation.initialText) { voice = nil }
             }
+            .fullScreenCover(isPresented: $showOnboarding) {
+                OnboardingView { showOnboarding = false }
+            }
             .alert(
                 approvals.pending?.title ?? "",
                 isPresented: Binding(get: { approvals.pending != nil && voice == nil }, set: { _ in })
@@ -115,6 +119,9 @@ struct RootView: View {
         .onOpenURL(perform: openURL)
         .onChange(of: router.pending) { _, action in handle(action) }
         .onAppear {
+            if !settings.onboardingDone {
+                if settings.isProviderConfigured { settings.onboardingDone = true } else { showOnboarding = true }
+            }
             handle(router.pending)
             WakeWordListener.shared.onWake = { command in
                 startVoice(command.isEmpty ? nil : command)

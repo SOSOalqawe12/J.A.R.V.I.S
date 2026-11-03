@@ -1,8 +1,10 @@
 import SwiftUI
 import QuickLook
 
-/// Full-screen voice conversation. Uses Gemini Live (real-time, interruptible)
-/// when available, otherwise the classic listen → think → speak loop.
+/// Full-screen voice & video conversation.
+/// - Gemini Live / OpenAI Realtime: real-time, interruptible, sees the camera.
+/// - Classic: works with every brain (Claude, GPT, local, on-device); the
+///   camera view is attached as a photo each time you speak.
 struct VoiceModeView: View {
     var initialText: String?
     var onClose: () -> Void
@@ -13,22 +15,24 @@ struct VoiceModeView: View {
     @ObservedObject private var voice = VoiceOutput.shared
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var approvals = ApprovalCenter.shared
-    @State private var useLive = true
+    @State private var engine: LiveEngineKind = .classic
     @State private var started = false
     @State private var typing = false
     @State private var typedText = ""
     @State private var previewURL: URL?
+    @State private var classicCameraOn = false
 
-    private var liveAvailable: Bool { settings.liveVoiceEnabled && settings.hasGeminiKey }
+    private var isLive: Bool { engine != .classic }
+    private var cameraOn: Bool { isLive ? live.cameraOn : classicCameraOn }
 
     var body: some View {
         ZStack {
             Theme.backgroundGradient
-            VStack(spacing: 18) {
+            VStack(spacing: 16) {
                 header
-                if useLive && live.cameraOn {
+                if cameraOn {
                     CameraPreview(session: live.camera.session)
-                        .frame(height: 220)
+                        .frame(height: 230)
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(alignment: .topTrailing) {
                             Button { live.flipCamera() } label: {
@@ -38,14 +42,26 @@ struct VoiceModeView: View {
                             }
                             .padding(10)
                         }
+                        .overlay(alignment: .bottomLeading) {
+                            Label(isLive ? "JARVIS can see this" : "Attached each time you speak", systemImage: "eye")
+                                .font(.caption2)
+                                .padding(6)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .padding(10)
+                        }
                         .padding(.horizontal)
                 }
                 Spacer(minLength: 0)
-                CoreOrbView(mode: orbMode, level: CGFloat(orbLevel), size: live.cameraOn ? 150 : 230)
+                CoreOrbView(mode: orbMode, level: CGFloat(orbLevel), size: cameraOn ? 140 : 230)
                 Text(statusText)
                     .font(.headline)
                     .foregroundColor(Theme.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
                     .animation(.easeInOut, value: statusText)
+                if let notice = isLive ? live.notice : nil {
+                    Text(notice).font(.caption).foregroundColor(Theme.warm).padding(.horizontal)
+                }
                 transcript
                 if !files.isEmpty { fileStrip }
                 Spacer(minLength: 0)
@@ -70,17 +86,46 @@ struct VoiceModeView: View {
             started = true
             WakeWordListener.shared.pause()
             chat.stop()
-            if liveAvailable {
-                useLive = true
-                await live.start(initialText: initialText)
-            } else {
-                startClassic()
-            }
+            await begin(LiveEngineKind.resolve(settings), initialText: initialText)
         }
         .onDisappear {
             live.stop()
+            live.camera.stop()
+            chat.cameraSnapshot = nil
             if chat.voiceLoopActive { chat.stopVoiceLoop() }
             WakeWordListener.shared.resumeIfEnabled()
+        }
+    }
+
+    // MARK: Engine switching
+
+    private func begin(_ newEngine: LiveEngineKind, initialText: String? = nil) async {
+        engine = newEngine
+        if newEngine == .classic {
+            chat.startVoiceLoop(initialText: initialText)
+        } else {
+            await live.start(engine: newEngine, initialText: initialText)
+        }
+    }
+
+    private func switchEngine(_ newEngine: LiveEngineKind) {
+        guard newEngine != engine else { return }
+        let wasCameraOn = cameraOn
+        live.stop()
+        if chat.voiceLoopActive { chat.stopVoiceLoop() }
+        if classicCameraOn { setClassicCamera(false) }
+        settings.liveEngine = newEngine.rawValue
+        Task {
+            await begin(newEngine)
+            if wasCameraOn { toggleCamera() }
+        }
+    }
+
+    private func engineAvailable(_ kind: LiveEngineKind) -> Bool {
+        switch kind {
+        case .gemini: return settings.hasGeminiKey
+        case .openai: return settings.hasOpenAIKey
+        case .classic: return settings.isProviderConfigured
         }
     }
 
@@ -88,12 +133,30 @@ struct VoiceModeView: View {
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("JARVIS").font(.title3.weight(.bold)).foregroundColor(.white)
-                Text(useLive ? "Live · \(live.modelName.isEmpty ? "Gemini" : live.modelName)" : "Voice · \(settings.provider.shortName)")
-                    .font(.caption)
-                    .foregroundColor(Theme.secondaryText)
-                    .lineLimit(1)
+            Menu {
+                ForEach(LiveEngineKind.allCases) { kind in
+                    Button {
+                        switchEngine(kind)
+                    } label: {
+                        if kind == engine {
+                            Label(kind.title, systemImage: "checkmark")
+                        } else {
+                            Text(kind.title + (engineAvailable(kind) ? "" : " (needs key)"))
+                        }
+                    }
+                    .disabled(!engineAvailable(kind))
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text("JARVIS").font(.title3.weight(.bold)).foregroundColor(.white)
+                        Image(systemName: "chevron.down").font(.caption).foregroundColor(Theme.secondaryText)
+                    }
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(Theme.secondaryText)
+                        .lineLimit(1)
+                }
             }
             Spacer()
             Button(action: close) {
@@ -105,6 +168,13 @@ struct VoiceModeView: View {
             }
         }
         .padding(.horizontal)
+    }
+
+    private var subtitle: String {
+        switch engine {
+        case .classic: return "Classic · \(settings.provider.shortName)"
+        default: return "\(engine.title) · \(live.modelName)"
+        }
     }
 
     private var transcript: some View {
@@ -125,7 +195,7 @@ struct VoiceModeView: View {
                 }
                 .padding(.horizontal, 24)
             }
-            .frame(maxHeight: 220)
+            .frame(maxHeight: 200)
             .onChange(of: transcriptLines.last?.text ?? "") { _, _ in
                 if let last = transcriptLines.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
@@ -160,9 +230,9 @@ struct VoiceModeView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 22) {
-            if useLive {
-                controlButton(live.cameraOn ? "video.fill" : "video", active: live.cameraOn) { live.toggleCamera() }
+        HStack(spacing: 20) {
+            controlButton(cameraOn ? "video.fill" : "video", active: cameraOn) { toggleCamera() }
+            if isLive {
                 controlButton(live.micMuted ? "mic.slash.fill" : "mic.fill", active: !live.micMuted) { live.micMuted.toggle() }
             } else {
                 controlButton(speech.isRecording ? "mic.fill" : "mic", active: speech.isRecording) {
@@ -177,10 +247,9 @@ struct VoiceModeView: View {
                     .frame(width: 70, height: 70)
                     .background(Circle().fill(Color.red))
             }
-            if useLive && liveFailed {
-                controlButton("arrow.triangle.2.circlepath", active: false) {
-                    useLive = false
-                    startClassic()
+            if isLive && liveFailed {
+                controlButton("arrow.clockwise", active: false) {
+                    Task { await live.start(engine: engine) }
                 }
             }
         }
@@ -192,8 +261,34 @@ struct VoiceModeView: View {
             Image(systemName: symbol)
                 .font(.title3)
                 .foregroundColor(active ? Theme.background : .white)
-                .frame(width: 58, height: 58)
+                .frame(width: 56, height: 56)
                 .background(Circle().fill(active ? Theme.accent : Color.white.opacity(0.14)))
+        }
+    }
+
+    // MARK: Camera
+
+    private func toggleCamera() {
+        if isLive {
+            live.toggleCamera()
+        } else {
+            setClassicCamera(!classicCameraOn)
+        }
+    }
+
+    private func setClassicCamera(_ on: Bool) {
+        if on {
+            Task {
+                if await live.camera.start() {
+                    classicCameraOn = true
+                    let camera = live.camera
+                    chat.cameraSnapshot = { camera.latestAttachment }
+                }
+            }
+        } else {
+            live.camera.stop()
+            classicCameraOn = false
+            chat.cameraSnapshot = nil
         }
     }
 
@@ -206,7 +301,7 @@ struct VoiceModeView: View {
     }
 
     private var transcriptLines: [TranscriptLine] {
-        if useLive {
+        if isLive {
             return live.lines.suffix(8).map { TranscriptLine(id: $0.id.uuidString, isUser: $0.isUser, text: $0.text) }
         }
         var result: [TranscriptLine] = chat.conversation.messages.suffix(8).compactMap { message in
@@ -229,12 +324,12 @@ struct VoiceModeView: View {
         return false
     }
 
-    private var files: [String] { useLive ? live.createdFiles : Array(chat.recentFiles.prefix(8)) }
+    private var files: [String] { isLive ? live.createdFiles : Array(chat.recentFiles.prefix(8)) }
 
     private var orbMode: CoreOrbView.Mode {
-        if useLive {
+        if isLive {
             switch live.phase {
-            case .connecting, .working: return .thinking
+            case .connecting, .reconnecting, .working: return .thinking
             case .speaking: return .speaking
             case .listening: return .listening
             default: return .idle
@@ -247,14 +342,15 @@ struct VoiceModeView: View {
     }
 
     private var orbLevel: Float {
-        if useLive { return max(live.inputLevel, live.outputLevel) }
+        if isLive { return max(live.inputLevel, live.outputLevel) }
         return max(speech.level, voice.level)
     }
 
     private var statusText: String {
-        if useLive {
+        if isLive {
             switch live.phase {
             case .idle, .connecting: return "Connecting…"
+            case .reconnecting: return "Reconnecting…"
             case .listening: return live.micMuted ? "Muted" : "Listening…"
             case .speaking: return "Speaking – just talk to interrupt"
             case .working(let label): return "\(label)…"
@@ -269,20 +365,17 @@ struct VoiceModeView: View {
         return "Tap the mic to talk"
     }
 
-    private func startClassic() {
-        live.stop()
-        chat.startVoiceLoop(initialText: initialText)
-    }
-
     private func sendTyped() {
         let text = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         typedText = ""
-        if useLive { live.sendText(text) } else { chat.send(text) }
+        if isLive { live.sendText(text) } else { chat.send(text) }
     }
 
     private func close() {
         live.stop()
+        live.camera.stop()
+        chat.cameraSnapshot = nil
         if chat.voiceLoopActive { chat.stopVoiceLoop() }
         onClose()
     }

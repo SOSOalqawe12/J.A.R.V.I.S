@@ -230,6 +230,13 @@ struct ClaudeProvider: LLMProvider {
         return turns.map { ["role": .string($0.role), "content": .array($0.content)] }
     }
 
+    static func totalTokens(_ usage: JSONValue?) -> Int? {
+        guard let usage else { return nil }
+        let keys = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+        let total = keys.compactMap { usage[$0]?.intValue }.reduce(0, +)
+        return total > 0 ? total : nil
+    }
+
     static func parseReply(_ json: JSONValue, requestedModel: String) throws -> LLMReply {
         let stopReason = json["stop_reason"]?.stringValue
         if stopReason == "refusal" {
@@ -263,7 +270,8 @@ struct ClaudeProvider: LLMProvider {
             raw: .array(blocks),
             model: json["model"]?.stringValue ?? requestedModel,
             stopReason: stopReason,
-            notice: stopReason == "max_tokens" ? "The reply was cut off because it hit the length limit." : nil
+            notice: stopReason == "max_tokens" ? "The reply was cut off because it hit the length limit." : nil,
+            tokens: ClaudeProvider.totalTokens(json["usage"])
         )
     }
 }

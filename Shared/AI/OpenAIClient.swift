@@ -231,8 +231,10 @@ struct OpenAICompatibleProvider: LLMProvider {
         }
         let message: JSONValue
         let finish: String?
+        let tokens: Int?
         if let onPartial {
             body["stream"] = true
+            if kind == .openai { body["stream_options"] = ["include_usage": true] }
             var accumulator = OpenAIStreamAccumulator()
             try await client.streamChat(.object(body)) { chunk in
                 if accumulator.add(chunk) {
@@ -241,12 +243,16 @@ struct OpenAICompatibleProvider: LLMProvider {
             }
             message = accumulator.message
             finish = accumulator.finishReason
+            tokens = accumulator.totalTokens
         } else {
             let json = try await client.chat(.object(body))
             message = json["choices"]?[0]?["message"] ?? [:]
             finish = json["choices"]?[0]?["finish_reason"]?.stringValue
+            tokens = json["usage"]?["total_tokens"]?.intValue
         }
-        return try OpenAICompatibleProvider.parse(message: message, finishReason: finish, model: model, prompted: mode == .prompted)
+        var reply = try OpenAICompatibleProvider.parse(message: message, finishReason: finish, model: model, prompted: mode == .prompted)
+        reply.tokens = tokens
+        return reply
     }
 
     static func textContent(_ value: JSONValue?) -> String {
@@ -380,11 +386,13 @@ struct OpenAICompatibleProvider: LLMProvider {
 struct OpenAIStreamAccumulator {
     private(set) var content = ""
     private(set) var finishReason: String?
+    private(set) var totalTokens: Int?
     private var calls: [Int: (id: String, name: String, arguments: String)] = [:]
 
     /// Returns true when the visible content changed.
     @discardableResult
     mutating func add(_ chunk: JSONValue) -> Bool {
+        if let tokens = chunk["usage"]?["total_tokens"]?.intValue { totalTokens = tokens }
         guard let choice = chunk["choices"]?[0] else { return false }
         if let finish = choice["finish_reason"]?.stringValue { finishReason = finish }
         let delta = choice["delta"] ?? choice["message"] ?? [:]
