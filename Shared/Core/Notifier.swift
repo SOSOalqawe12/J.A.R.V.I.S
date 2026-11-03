@@ -17,7 +17,7 @@ enum Notifier {
     }
 
     static func post(title: String, body: String) async {
-        try? await schedule(title: title, body: body, after: nil)
+        _ = try? await schedule(title: title, body: body, after: nil)
     }
 
     /// Schedules a notification `after` seconds from now (nil = immediately).

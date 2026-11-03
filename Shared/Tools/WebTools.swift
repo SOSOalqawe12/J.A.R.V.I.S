@@ -71,6 +71,22 @@ enum DuckDuckGo {
     }
 }
 
+enum WebText {
+    static func plainText(fromHTML html: String) -> String {
+        var text = html
+        for pattern in ["(?is)<script.*?</script>", "(?is)<style.*?</style>", "(?is)<noscript.*?</noscript>", "(?is)<svg.*?</svg>", "(?s)<!--.*?-->"] {
+            text = text.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
+        }
+        text = text.replacingOccurrences(of: "(?i)<(br|/p|/div|/h[1-6]|/li|/tr)[^>]*>", with: "\n", options: .regularExpression)
+        text = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        let entities = ["&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'"]
+        for (entity, value) in entities { text = text.replacingOccurrences(of: entity, with: value) }
+        text = text.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\\n\\s*\\n+", with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 struct FetchURLTool: AgentTool {
     let name = "fetch_url"
     let activityLabel = "Reading web page"
