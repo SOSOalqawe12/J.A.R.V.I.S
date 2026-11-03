@@ -81,6 +81,7 @@ struct AIProviderSettingsSections: View {
             }
 
             openAISection
+            deepSeekSection
             localSection
 
             Section {
@@ -156,6 +157,33 @@ struct AIProviderSettingsSections: View {
             Text("OpenAI")
         } footer: {
             Text("Choose “OpenAI” as the brain to chat with GPT models. The key is also used for images and spoken audio when no Gemini key is set.")
+        }
+    }
+
+    // MARK: DeepSeek
+
+    private var deepSeekSection: some View {
+        Section {
+            HStack {
+                SecureField("DeepSeek API key", text: $settings.deepSeekAPIKey)
+                    .textContentType(.password)
+                    .autocorrectionDisabled()
+                pasteButton { settings.deepSeekAPIKey = $0 }
+            }
+            Link("Create a key at platform.deepseek.com", destination: URL(string: "https://platform.deepseek.com/api_keys")!)
+            if settings.hasDeepSeekKey {
+                Picker("Model", selection: $settings.deepSeekModel) {
+                    Text("DeepSeek Chat (fast, uses tools)").tag("deepseek-chat")
+                    Text("DeepSeek Reasoner (thinks first)").tag("deepseek-reasoner")
+                    if !["deepseek-chat", "deepseek-reasoner"].contains(settings.deepSeekModel) {
+                        Text(settings.deepSeekModel).tag(settings.deepSeekModel)
+                    }
+                }
+            }
+        } header: {
+            Text("DeepSeek")
+        } footer: {
+            Text("Choose “DeepSeek” as the brain. Photos and the call camera are described for DeepSeek (by Gemini/OpenAI if you have a key, otherwise on-device). Spoken replies use the natural voice if you have a Gemini or OpenAI key, otherwise the device voice.")
         }
     }
 
@@ -271,6 +299,7 @@ struct AIProviderSettingsSections: View {
         case .openai: return "OpenAI GPT models via your API key."
         case .local: return "Your own model server – Ollama, LM Studio, llama.cpp – or any OpenAI-compatible service."
         case .apple: return "Apple's on-device model: private and offline (iOS 26 / macOS 26 with Apple Intelligence)."
+        case .deepseek: return "DeepSeek chat or reasoning models. DeepSeek can't see images, so JARVIS describes photos and the camera view for it."
         }
     }
 
@@ -340,6 +369,7 @@ struct VoiceSettingsSection: View {
 
     var body: some View {
         Section {
+            Toggle("Send voice messages when I stop talking", isOn: $settings.autoSendVoice)
             Toggle("Speak replies", isOn: $settings.speakReplies)
             Toggle("Hands-free conversation", isOn: $settings.handsFree)
             Picker("Reply voice", selection: $settings.voiceEngine) {

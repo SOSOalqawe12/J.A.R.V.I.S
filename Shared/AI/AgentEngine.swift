@@ -70,7 +70,14 @@ final class AgentEngine {
                 model = first
             }
             let mode = OpenAICompatibleProvider.ToolMode(rawValue: settings.localToolMode) ?? .native
-            return OpenAICompatibleProvider(kind: .local, client: client, model: model, toolMode: mode)
+            return OpenAICompatibleProvider(kind: .local, client: client, model: model, toolMode: mode,
+                                            describeImages: !VisionBridge.supportsImages(model: model, kind: .local))
+        case .deepseek:
+            guard settings.hasDeepSeekKey else { throw LLMError.missingAPIKey(.deepseek) }
+            let client = OpenAICompatibleClient(baseURL: "https://api.deepseek.com/v1", apiKey: settings.deepSeekAPIKey)
+            let model = settings.deepSeekModel.isEmpty ? "deepseek-chat" : settings.deepSeekModel
+            return OpenAICompatibleProvider(kind: .deepseek, client: client, model: model, toolMode: .native,
+                                            describeImages: !VisionBridge.supportsImages(model: model, kind: .deepseek))
         case .apple:
             return AppleIntelligenceProvider()
         }

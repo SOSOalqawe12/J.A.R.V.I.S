@@ -14,6 +14,8 @@ final class AppSettings: ObservableObject {
     @Published var claudeAPIKey: String { didSet { KeychainStore.set(claudeAPIKey, for: "claude") } }
     @Published var openAIAPIKey: String { didSet { KeychainStore.set(openAIAPIKey, for: "openai") } }
     @Published var localAPIKey: String { didSet { KeychainStore.set(localAPIKey, for: "local") } }
+    @Published var deepSeekAPIKey: String { didSet { KeychainStore.set(deepSeekAPIKey, for: "deepseek") } }
+    @Published var deepSeekModel: String { didSet { defaults.set(deepSeekModel, forKey: "deepSeekModel") } }
 
     // MARK: OpenAI & OpenAI-compatible servers
 
@@ -57,6 +59,8 @@ final class AppSettings: ObservableObject {
     @Published var speechRate: Double { didSet { defaults.set(speechRate, forKey: "speechRate") } }
     /// Empty = system language.
     @Published var recognitionLocale: String { didSet { defaults.set(recognitionLocale, forKey: "recognitionLocale") } }
+    /// Send voice messages automatically when the user stops talking.
+    @Published var autoSendVoice: Bool { didSet { defaults.set(autoSendVoice, forKey: "autoSendVoice") } }
     /// "natural" = Gemini neural voice, "device" = on-device speech synthesis.
     @Published var voiceEngine: String { didSet { defaults.set(voiceEngine, forKey: "voiceEngine") } }
     /// Real-time Gemini Live conversation in voice mode.
@@ -103,6 +107,8 @@ final class AppSettings: ObservableObject {
         claudeAPIKey = KeychainStore.get("claude")
         openAIAPIKey = KeychainStore.get("openai")
         localAPIKey = KeychainStore.get("local")
+        deepSeekAPIKey = KeychainStore.get("deepseek")
+        deepSeekModel = d.string(forKey: "deepSeekModel") ?? "deepseek-chat"
         openAIModel = d.string(forKey: "openAIModel") ?? ""
         openAIImageModel = d.string(forKey: "openAIImageModel") ?? "gpt-image-1"
         openAIVoice = d.string(forKey: "openAIVoice") ?? "onyx"
@@ -126,6 +132,7 @@ final class AppSettings: ObservableObject {
         voiceIdentifier = d.string(forKey: "voiceIdentifier") ?? ""
         speechRate = d.object(forKey: "speechRate") as? Double ?? 0.5
         recognitionLocale = d.string(forKey: "recognitionLocale") ?? ""
+        autoSendVoice = d.object(forKey: "autoSendVoice") as? Bool ?? true
         voiceEngine = d.string(forKey: "voiceEngine") ?? "natural"
         liveVoiceEnabled = d.object(forKey: "liveVoiceEnabled") as? Bool ?? true
         geminiLiveModel = d.string(forKey: "geminiLiveModel") ?? ""
@@ -152,6 +159,7 @@ final class AppSettings: ObservableObject {
     var hasGeminiKey: Bool { !geminiAPIKey.isEmpty }
     var hasClaudeKey: Bool { !claudeAPIKey.isEmpty }
     var hasOpenAIKey: Bool { !openAIAPIKey.isEmpty }
+    var hasDeepSeekKey: Bool { !deepSeekAPIKey.isEmpty }
 
     /// True when the selected provider has what it needs to run.
     var isProviderConfigured: Bool { isConfigured(provider) }
@@ -164,6 +172,7 @@ final class AppSettings: ObservableObject {
         case .openai: return hasOpenAIKey
         case .local: return !localBaseURL.trimmingCharacters(in: .whitespaces).isEmpty
         case .apple: return AppleIntelligence.isAvailable
+        case .deepseek: return hasDeepSeekKey
         }
     }
 

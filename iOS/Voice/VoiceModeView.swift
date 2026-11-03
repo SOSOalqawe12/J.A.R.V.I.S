@@ -234,6 +234,7 @@ struct VoiceModeView: View {
             controlButton(cameraOn ? "video.fill" : "video", active: cameraOn) { toggleCamera() }
             if isLive {
                 controlButton(live.micMuted ? "mic.slash.fill" : "mic.fill", active: !live.micMuted) { live.micMuted.toggle() }
+                controlButton(live.speakerOn ? "speaker.wave.3.fill" : "speaker.fill", active: live.speakerOn) { live.speakerOn.toggle() }
             } else {
                 controlButton(speech.isRecording ? "mic.fill" : "mic", active: speech.isRecording) {
                     if speech.isRecording { chat.finishListening() } else { chat.toggleListening() }

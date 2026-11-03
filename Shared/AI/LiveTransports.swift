@@ -48,10 +48,13 @@ enum LiveEngineKind: String, CaseIterable, Identifiable {
         case "openai": return settings.hasOpenAIKey ? .openai : .classic
         case "classic": return .classic
         default:
-            if !settings.liveVoiceEnabled { return .classic }
-            if settings.hasGeminiKey { return .gemini }
-            if settings.hasOpenAIKey { return .openai }
-            return .classic
+            // Automatic: talk to the brain you picked.
+            guard settings.liveVoiceEnabled else { return .classic }
+            switch settings.provider {
+            case .gemini: return settings.hasGeminiKey ? .gemini : .classic
+            case .openai: return settings.hasOpenAIKey ? .openai : .classic
+            default: return .classic
+            }
         }
     }
 }

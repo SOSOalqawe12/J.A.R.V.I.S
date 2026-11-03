@@ -51,13 +51,17 @@ struct AppleIntelligenceProvider: LLMProvider {
         if #available(iOS 26.0, macOS 26.0, *) {
             guard AppleIntelligence.isAvailable else { throw LLMError.unavailable(AppleIntelligence.status) }
             let tools = request.tools.filter { AppleIntelligence.toolNames.contains($0.name) }
+            var messages = request.messages
+            if VisionBridge.containsImages(messages) {
+                messages = await VisionBridge.textOnly(messages, settings: AppSettings.shared)
+            }
             let prompt = """
             You are JARVIS, a concise, friendly personal assistant on the user's device. \
             Reply in the user's language. Create real files with tools when asked to make something.
             \(PromptedTools.instructions(for: tools))
 
             Conversation so far:
-            \(PromptedTools.transcript(request.messages, characterBudget: 5_000))
+            \(PromptedTools.transcript(messages, characterBudget: 5_000))
             Assistant:
             """
             let session = LanguageModelSession()

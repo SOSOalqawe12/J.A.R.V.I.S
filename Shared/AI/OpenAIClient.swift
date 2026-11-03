@@ -189,6 +189,8 @@ struct OpenAICompatibleProvider: LLMProvider {
     let client: OpenAICompatibleClient
     let model: String
     let toolMode: ToolMode
+    /// Text-only model: turn images into descriptions first (VisionBridge).
+    var describeImages = false
 
     var modelName: String { model }
 
@@ -201,15 +203,34 @@ struct OpenAICompatibleProvider: LLMProvider {
     }
 
     private func run(_ request: LLMRequest, onPartial: ((String) -> Void)?) async throws -> LLMReply {
+        var request = request
+        if describeImages, VisionBridge.containsImages(request.messages) {
+            request.messages = await VisionBridge.textOnly(request.messages, settings: AppSettings.shared)
+        }
         let mode: ToolMode = request.tools.isEmpty ? .off : toolMode
         do {
             return try await perform(request, mode: mode, onPartial: onPartial)
+        } catch LLMError.http(let status, let message) where OpenAICompatibleProvider.isImageSupportError(status, message)
+                    && VisionBridge.containsImages(request.messages) {
+            // The model can't take images – describe them and try again.
+            var described = request
+            described.messages = await VisionBridge.textOnly(request.messages, settings: AppSettings.shared)
+            var reply = try await perform(described, mode: mode, onPartial: onPartial)
+            reply.notice = "\(model) can't see images, so JARVIS described them for it."
+            return reply
         } catch LLMError.http(let status, let message) where mode == .native && OpenAICompatibleProvider.isToolSupportError(status, message) {
             // The model can't do native function calling – fall back to prompted tools.
             var reply = try await perform(request, mode: .prompted, onPartial: onPartial)
             reply.notice = "This model doesn't support native tool calling, so JARVIS described the tools in the prompt instead."
             return reply
         }
+    }
+
+    static func isImageSupportError(_ status: Int, _ message: String) -> Bool {
+        let lower = message.lowercased()
+        guard (400..<500).contains(status) else { return false }
+        return lower.contains("image") || lower.contains("vision") || lower.contains("multimodal")
+            || lower.contains("unknown variant") || lower.contains("content type")
     }
 
     static func isToolSupportError(_ status: Int, _ message: String) -> Bool {

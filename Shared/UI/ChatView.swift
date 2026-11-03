@@ -141,6 +141,7 @@ struct ChatView: View {
         case .openai: return "Add your OpenAI API key to wake me up."
         case .local: return "Set your local server address in Settings."
         case .apple: return "Apple Intelligence isn't available on this device – pick another brain."
+        case .deepseek: return "Add your DeepSeek API key to wake me up."
         default: return "Add your Gemini API key to wake me up."
         }
     }
@@ -270,12 +271,12 @@ struct ChatView: View {
             if speech.isRecording {
                 HStack(spacing: 10) {
                     CoreOrbView(mode: .listening, level: CGFloat(speech.level), size: 30)
-                    Text(speech.transcript.isEmpty ? "Listening…" : speech.transcript)
+                    Text(speech.transcript.isEmpty ? (settings.autoSendVoice ? "Listening… (sends when you stop talking)" : "Listening…") : speech.transcript)
                         .font(.subheadline)
                         .foregroundColor(Theme.text)
                         .lineLimit(3)
                     Spacer()
-                    Button("Send") { vm.finishListening() }
+                    Button(settings.autoSendVoice ? "Send" : "Done") { vm.finishListening() }
                         .buttonStyle(.borderedProminent)
                         .tint(Theme.accent)
                 }

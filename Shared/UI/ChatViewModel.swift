@@ -46,6 +46,10 @@ final class ChatViewModel: ObservableObject {
         speech.onAutoFinish = { [weak self] text in
             self?.send(text)
         }
+        speech.onStopped = { [weak self] text in
+            guard let self else { return }
+            self.draft = self.draft.isEmpty ? text : self.draft + " " + text
+        }
         VoiceOutput.shared.onFinish = { [weak self] in
             self?.voiceReplyFinished()
         }
@@ -148,24 +152,30 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: Voice
 
+    /// Mic button: starts listening, or – if already listening – sends right away.
     func toggleListening() {
         VoiceOutput.shared.stop()
         WakeWordListener.shared.pause()
-        speech.autoFinishAfterSilence = settings.handsFree || voiceLoopActive
         if speech.isRecording {
-            speech.stop()
-            WakeWordListener.shared.resumeIfEnabled()
-        } else {
-            Task { await speech.start(localeID: settings.recognitionLocale) }
+            finishListening()
+            return
         }
+        speech.autoFinishAfterSilence = settings.autoSendVoice || settings.handsFree || voiceLoopActive
+        Task { await speech.start(localeID: settings.recognitionLocale) }
     }
 
-    /// Sends what was dictated (push-to-talk mode).
+    /// Ends dictation: sends it (auto-send) or puts it in the text box to edit.
     func finishListening() {
         guard speech.isRecording else { return }
-        let text = speech.transcript
+        let text = speech.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         speech.stop()
-        if !text.isEmpty { send(text) }
+        if text.isEmpty {
+            WakeWordListener.shared.resumeIfEnabled()
+        } else if settings.autoSendVoice || voiceLoopActive || settings.handsFree {
+            send(text)
+        } else {
+            draft = draft.isEmpty ? text : draft + " " + text
+        }
     }
 
     /// Classic voice conversation: listen → answer → speak → listen again.

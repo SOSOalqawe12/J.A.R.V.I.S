@@ -31,6 +31,9 @@ final class LiveVoiceSession: ObservableObject {
     @Published var micMuted = false {
         didSet { audio.muted = micMuted }
     }
+    @Published var speakerOn = true {
+        didSet { audio.setSpeaker(speakerOn) }
+    }
 
     let camera = CameraFrameSource()
     private let audio = LiveAudioIO()
@@ -302,6 +305,7 @@ final class LiveVoiceSession: ObservableObject {
         do {
             try audio.start(micSampleRate: transport?.micSampleRate ?? 16_000)
             audio.muted = micMuted
+            audio.setSpeaker(speakerOn)
             Haptics.success()
         } catch {
             fail("Audio couldn't start: \(error.localizedDescription)")
@@ -353,6 +357,9 @@ final class LiveVoiceSession: ObservableObject {
             if await camera.start() {
                 cameraOn = true
                 notice = nil
+                // Starting the camera can reconfigure audio; make sure the call is still audible.
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                audio.recover()
             } else {
                 notice = camera.lastError ?? "The camera couldn't start."
             }

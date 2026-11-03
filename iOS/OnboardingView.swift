@@ -60,6 +60,12 @@ struct OnboardingView: View {
                     Link("Create a key at platform.openai.com", destination: URL(string: "https://platform.openai.com/api-keys")!)
                         .font(.footnote)
                 }
+                brainCard(.deepseek, title: "DeepSeek", badge: "API key · low cost",
+                          detail: "DeepSeek Chat and Reasoner. JARVIS describes images and the camera for it.") {
+                    keyField("DeepSeek API key", text: $settings.deepSeekAPIKey)
+                    Link("Create a key at platform.deepseek.com", destination: URL(string: "https://platform.deepseek.com/api_keys")!)
+                        .font(.footnote)
+                }
                 brainCard(.claude, title: "Claude", badge: "API key", detail: "Anthropic's Claude models.") {
                     keyField("Claude API key", text: $settings.claudeAPIKey)
                     Link("Create a key at console.anthropic.com", destination: URL(string: "https://console.anthropic.com/settings/keys")!)

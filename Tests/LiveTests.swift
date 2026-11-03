@@ -112,17 +112,23 @@ final class LimitTests: XCTestCase {
     @MainActor
     func testEngineResolution() {
         let settings = AppSettings.shared
-        let saved = (settings.liveEngine, settings.geminiAPIKey, settings.openAIAPIKey)
+        let saved = (settings.liveEngine, settings.geminiAPIKey, settings.openAIAPIKey, settings.provider)
         defer {
             settings.liveEngine = saved.0
             settings.geminiAPIKey = saved.1
             settings.openAIAPIKey = saved.2
+            settings.provider = saved.3
         }
         settings.geminiAPIKey = ""
-        settings.openAIAPIKey = ""
-        settings.liveEngine = "auto"
-        XCTAssertEqual(LiveEngineKind.resolve(settings), .classic)
         settings.openAIAPIKey = "sk-test"
+        settings.liveEngine = "auto"
+        settings.provider = .openai
+        XCTAssertEqual(LiveEngineKind.resolve(settings), .openai, "automatic follows the selected brain")
+        settings.provider = .deepseek
+        XCTAssertEqual(LiveEngineKind.resolve(settings), .classic, "text brains use classic calls")
+        settings.provider = .gemini
+        XCTAssertEqual(LiveEngineKind.resolve(settings), .classic, "no Gemini key → classic")
+        settings.liveEngine = "openai"
         XCTAssertEqual(LiveEngineKind.resolve(settings), .openai)
         settings.liveEngine = "gemini"
         XCTAssertEqual(LiveEngineKind.resolve(settings), .classic, "falls back when the chosen engine has no key")

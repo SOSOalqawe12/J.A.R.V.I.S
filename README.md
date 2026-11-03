@@ -25,11 +25,14 @@ You open the app, type or say a request, and JARVIS creates the file. Everything
   - Calls reconnect seamlessly when Google rotates the connection (session resumption).
   - Camera frames are sent at low resolution and only when the scene changes, so video calls last much longer and use far less quota.
 - ⚡️ **OpenAI Realtime** (`gpt-realtime`): the alternative when Gemini's free limits are too tight. Natural voices (Cedar, Marin…), tool use during the call, and the camera view is sent each time you start talking.
-- 💬 **Classic**: works with **every brain** (Claude, GPT, local models, on-device). It listens, thinks, and answers in a natural voice. With the camera on, a photo of what you're looking at goes with every sentence.
+- 💬 **Classic**: works with **every brain** (Claude, GPT, DeepSeek, local models, on-device). It listens, thinks, and answers in a natural voice. With the camera on, a photo of what you're looking at goes with every sentence.
+- **Automatic** engine choice follows your brain: Gemini uses Gemini Live, OpenAI uses Realtime, and everything else uses Classic.
+- 🔊 Call audio restarts by itself when iOS reconfigures sound (turning on the camera, AirPods, a phone call). It plays on the loudspeaker with a volume boost, and the call screen has a speaker toggle.
 - 📷 **Live vision**: turn on the camera during a call and ask "what am I looking at?"
 - 🗣 **Natural voice** for spoken replies (Gemini neural voices, e.g. Charon, Kore, Puck), with an automatic fallback to the best device voice
 - 👂 **"Hey JARVIS" wake word** while the app is open (on-device recognition when available)
-- Push-to-talk, hands-free mode, typing during a call, and 14 listening languages including Arabic
+- 🎤 Voice messages **send themselves** when you stop talking. Tap the mic again to send right away. Turn this off in Settings to edit the text first.
+- Hands-free mode, typing during a call, and 14 listening languages including Arabic
 
 **Siri & Shortcuts**
 - "Hey Siri, **talk to JARVIS**" opens live voice
@@ -44,6 +47,7 @@ You open the app, type or say a request, and JARVIS creates the file. Everything
 - **Gemini** (default): chat, images, voices, Live voice
 - **Claude** (API key)
 - **OpenAI** (API key): GPT models picked automatically, plus OpenAI images and voices when there's no Gemini key
+- **DeepSeek** (API key): DeepSeek Chat and Reasoner. DeepSeek can't see images, so JARVIS **describes photos and the camera view** for it. Gemini or OpenAI does the describing if you have a key, otherwise Apple's on-device Vision does (objects, scene, text, people, QR codes). The same applies to text-only local models and the on-device model.
 - **Local / custom server**, any OpenAI-compatible endpoint:
   - **Ollama**, **LM Studio**, **llama.cpp**, **Jan**, **vLLM**
   - or clouds like **OpenRouter, Groq, DeepSeek, Mistral, xAI, Together**

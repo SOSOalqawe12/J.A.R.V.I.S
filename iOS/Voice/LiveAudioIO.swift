@@ -1,12 +1,15 @@
 import Foundation
 import AVFoundation
 
-/// Full-duplex audio for live conversations: microphone → 16 kHz PCM chunks,
-/// 24 kHz PCM from the model → speaker. Uses Apple's voice processing for
-/// echo cancellation so JARVIS doesn't hear itself.
+/// Full-duplex audio for live conversations: microphone → PCM chunks,
+/// PCM from the model → speaker. Uses Apple's voice processing for echo
+/// cancellation, and recovers automatically when iOS reconfigures audio
+/// (starting the camera, plugging in headphones, a phone call…) – otherwise
+/// the engine silently stops and the call goes quiet.
 final class LiveAudioIO: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
+    private let booster = AVAudioUnitEQ(numberOfBands: 0)
     private var converter: AVAudioConverter?
     private var micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
     private let speakerFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)!
@@ -15,6 +18,8 @@ final class LiveAudioIO: @unchecked Sendable {
     private var playbackGeneration = 0
     private var chunk = Data()
     private var running = false
+    private var observers: [NSObjectProtocol] = []
+    private var attached = false
 
     /// 100 ms chunks of 16-bit little-endian mono PCM at the requested rate.
     var onMicrophoneChunk: ((Data) -> Void)?
@@ -28,6 +33,9 @@ final class LiveAudioIO: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _muted }
         set { lock.lock(); _muted = newValue; lock.unlock() }
     }
+
+    /// Loudspeaker (true) or earpiece/headset (false).
+    private(set) var speakerOn = true
 
     var isPlaying: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -44,32 +52,106 @@ final class LiveAudioIO: @unchecked Sendable {
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
+        try? engine.inputNode.setVoiceProcessingEnabled(true)
+        // Don't let voice processing turn down JARVIS's own voice.
+        engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+            AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+        booster.globalGain = 8
+        if !attached {
+            engine.attach(player)
+            engine.attach(booster)
+            attached = true
+        }
+        try wire()
+        running = true
+        applySpeaker()
+        observe()
+    }
+
+    /// (Re)builds the graph: mic tap + player → booster → mixer.
+    private func wire() throws {
         let input = engine.inputNode
-        try? input.setVoiceProcessingEnabled(true)
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw NSError(domain: "JARVIS", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input is available."])
         }
         converter = AVAudioConverter(from: inputFormat, to: micFormat)
-
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: speakerFormat)
+        input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             self?.process(buffer)
         }
+        engine.disconnectNodeOutput(player)
+        engine.disconnectNodeOutput(booster)
+        engine.connect(player, to: booster, format: speakerFormat)
+        engine.connect(booster, to: engine.mainMixerNode, format: speakerFormat)
+        engine.mainMixerNode.outputVolume = 1
+        player.volume = 1
         engine.prepare()
         try engine.start()
         player.play()
-        running = true
     }
 
     func stop() {
         guard running else { return }
         running = false
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers = []
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
+        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    func setSpeaker(_ on: Bool) {
+        speakerOn = on
+        applySpeaker()
+    }
+
+    private func applySpeaker() {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs.map(\.portType)
+        let headphones: Set<AVAudioSession.Port> = [.headphones, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .airPlay, .carAudio, .usbAudio]
+        if outputs.contains(where: { headphones.contains($0) }) { return }
+        try? session.overrideOutputAudioPort(speakerOn ? .speaker : .none)
+    }
+
+    // MARK: Recovery
+
+    private func observe() {
+        guard observers.isEmpty else { return }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.recover()
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+            self?.recover()
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.running else { return }
+            self.applySpeaker()
+            if !self.engine.isRunning { self.recover() }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.recover()
+        })
+    }
+
+    /// Restarts the engine after iOS stopped or reconfigured it.
+    func recover() {
+        guard running else { return }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+        try? session.setActive(true, options: .notifyOthersOnDeactivation)
+        if !engine.isRunning {
+            engine.stop()
+            try? wire()
+        } else if !player.isPlaying {
+            player.play()
+        }
+        applySpeaker()
     }
 
     // MARK: Microphone
@@ -107,6 +189,7 @@ final class LiveAudioIO: @unchecked Sendable {
         guard running, frames > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: speakerFormat, frameCapacity: AVAudioFrameCount(frames)),
               let channel = buffer.floatChannelData?[0] else { return }
+        if !engine.isRunning { recover() }
         buffer.frameLength = AVAudioFrameCount(frames)
         data.withUnsafeBytes { raw in
             for index in 0..<frames {
