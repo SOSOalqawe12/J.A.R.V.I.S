@@ -4,6 +4,7 @@
 xcuserdata/
 DerivedData/
 build/
+build-tests/
 dist/
 dmg/
 *.ipa

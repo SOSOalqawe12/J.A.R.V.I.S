@@ -140,6 +140,17 @@ JARVIS runs the official `claude` CLI in your JARVIS folder, so requests use you
 
 ---
 
+## Tests
+
+CI runs a macOS unit-test suite (`Tests/`) before building. It covers:
+- the Gemini and Claude request and response formats, including tool-call round trips and thinking and thought-signature replay
+- workspace path safety and the calculator
+- the file tools (create, append, edit, move, zip)
+- PDF, chart and QR generation
+
+To also run **live API round trips** on every push, add repository secrets named
+`GEMINI_API_KEY` and/or `ANTHROPIC_API_KEY` (Settings › Secrets and variables › Actions). Without them those tests are skipped.
+
 ## Project layout
 
 ```
@@ -152,6 +163,7 @@ Shared/             code used by both apps
 iOS/                iPhone app (tabs, Face ID, Photos, Siri intent, Info.plist)
 macOS/              Mac app (screen capture, Screen Watch, Mac tools, hotkeys,
                     command bar, Claude Code provider, menu bar)
+Tests/              macOS unit tests + optional live API tests
 project.yml         XcodeGen project spec
 scripts/make_icons.py  regenerates the app icons
 .github/workflows/  CI that builds the IPA + Mac app

@@ -317,7 +317,7 @@ struct TextToSpeechTool: AgentTool {
 }
 
 /// Renders AVSpeechSynthesizer output into an audio file.
-final class SpeechFileWriter: NSObject, AVSpeechSynthesizerDelegate {
+final class SpeechFileWriter: NSObject, AVSpeechSynthesizerDelegate, @unchecked Sendable {
     private let synthesizer = AVSpeechSynthesizer()
     private var file: AVAudioFile?
     private var continuation: CheckedContinuation<Void, Error>?
